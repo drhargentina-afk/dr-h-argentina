@@ -1,0 +1,27 @@
+{
+  "name": "Dr. H Argentina — Inteligencia y Auditoría Judicial Ciudadana",
+  "short_name": "Dr. H AR",
+  "description": "Plataforma Multi-Agente (Agente000 + 7 Fueros + Auditor ISO-Compliance) para lectura en RAM Zero-Storage de expedientes judiciales argentinos, calculadora de plazos y puente normativo hacia Proyecto Gamuza.",
+  "lang": "es-AR",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#0b132b",
+  "theme_color": "#1c2541",
+  "categories": ["legal", "productivity", "utilities", "education"],
+  "icons": [
+    {
+      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'%3E%3Crect width='192' height='192' rx='36' fill='%230b132b'/%3E%3Cpath d='M48 44h96v16H48zm16 32h64v72H64z' fill='%233a86ff'/%3E%3Ctext x='96' y='130' font-family='sans-serif' font-size='44' font-weight='bold' fill='%23ffffff' text-anchor='middle'%3EDr.H%3C/text%3E%3C/svg%3E",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' rx='96' fill='%230b132b'/%3E%3Ccircle cx='256' cy='256' r='190' fill='%231c2541' stroke='%233a86ff' stroke-width='16'/%3E%3Ctext x='256' y='285' font-family='sans-serif' font-size='120' font-weight='bold' fill='%23ffffff' text-anchor='middle'%3EDr.H%3C/text%3E%3C/svg%3E",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

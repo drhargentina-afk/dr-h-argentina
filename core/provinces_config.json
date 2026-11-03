@@ -1,0 +1,195 @@
+{
+  "country_code": "AR",
+  "version": "2026.11.1",
+  "default_judicial_holidays": {
+    "feria_enero": {
+      "start_mm_dd": "01-01",
+      "end_mm_dd": "01-31",
+      "description": "Feria Judicial de Verano (Enero completo)"
+    },
+    "feria_invierno": {
+      "duration_days": 14,
+      "month": 7,
+      "description": "Feria Judicial de Invierno (2 semanas en julio según acordada de cada Corte)"
+    },
+    "dia_del_judicial": {
+      "date_mm_dd": "11-16",
+      "description": "Día del Trabajador Judicial Argentino (inhábil judicial)"
+    }
+  },
+  "gratuity_principles": {
+    "03_laboral": {
+      "applies": true,
+      "law_reference": "Art. 20 Ley 20.744 (Ley de Contrato de Trabajo)",
+      "citizen_protection_rule": "El trabajador o sus derechohabientes gozan del beneficio de la gratuidad en los procedimientos judiciales o administrativos derivados de la aplicación de la LCT.Su vivienda no puede ser afectada al pago de costas en ningún caso. Ningún abogado o gestor puede exigir adelantos para tasas de justicia al trabajador.",
+      "max_quota_litis_pct": "20.00"
+    },
+    "05_comercial_consumidor": {
+      "applies": true,
+      "law_reference": "Art. 53 in fine y Art. 55 Ley 24.240 (Defensa del Consumidor)",
+      "citizen_protection_rule": "Las actuaciones judiciales que se inicien de conformidad con la Ley de Defensa del Consumidor en razón de un derecho o interés individual gozarán del beneficio de justicia gratuita. El consumidor está exento del pago de tasa de justicia.",
+      "max_quota_litis_pct": "20.00"
+    },
+    "02_familia": {
+      "applies": true,
+      "law_reference": "Art. 706 y 547 Código Civil y Comercial de la Nación (Alimentos y Tutela Efectiva)",
+      "citizen_protection_rule": "En reclamos de alimentos para niños, niñas y adolescentes o personas vulnerables las costas recaen sobre el alimentante obligado y no puede exigirse depósito previo al reclamante alimentado.",
+      "max_quota_litis_pct": "0.00"
+    },
+    "06_seguridad_social_salud": {
+      "applies": true,
+      "law_reference": "Ley 24.463 y Ley 16.986 (Amparos de Salud y Previsional)",
+      "citizen_protection_rule": "Los reclamos previsionales de jubilados y pensionados gozan de exención de tasa de justicia; los amparos de salud por prestaciones médicas urgentes tramitan con exención de cargas fiscales previas.",
+      "max_quota_litis_pct": "20.00"
+    }
+  },
+  "jurisdictions": {
+    "PJN_NACION_CABA": {
+      "name": "Poder Judicial de la Nación y Justicia de CABA",
+      "electronic_system": "Sistema Lex100 (PJN) / EJE (Justicia CABA)",
+      "procedural_code": "Código Procesal Civil y Comercial de la Nación (Ley 17.454 t.o.) / CPPF",
+      "dias_de_nota": ["MARTES", "VIERNES"],
+      "nota_rule": "Notificación ministerio legis (Art. 133 CPCCN) los martes y viernes. Si uno de ellos fuere feriado, la notificación tendrá lugar el siguiente día de nota.",
+      "grace_period_hours": "Dos (2) primeras horas del despacho del día hábil inmediato siguiente (Art. 124 CPCCN - 07:30 a 09:30 hs).",
+      "default_answer_lawsuit_days": {
+        "ordinario": 15,
+        "sumarisimo": 5,
+        "ejecutivo": 5,
+        "laboral_ley_18345": 10
+      },
+      "caducidad_instancia_months": {
+        "01_penal": null,
+        "02_familia": 3,
+        "03_laboral": null,
+        "04_civil": 6,
+        "05_comercial_consumidor": 6,
+        "06_seguridad_social_salud": 3,
+        "07_contencioso_tributario": 6,
+        "segunda_instancia_o_sumarisimo": 3
+      },
+      "caducidad_notes": "En el Fuero Nacional del Trabajo (Ley 18.345 Art. 46) rige el impulso de oficio, por lo que no opera la caducidad de instancia en perjuicio del trabajador, aunque la inactividad prolongada demora el cobro."
+    },
+    "PBA_MEV_SCBA": {
+      "name": "Provincia de Buenos Aires (SCBA)",
+      "electronic_system": "MEV (Mesa de Entradas Virtual SCBA) / Portal de Notificaciones y Presentaciones Electrónicas",
+      "procedural_code": "Código Procesal Civil y Comercial de la Prov. de Buenos Aires (Ley 7.425) / Ley 11.653 y 15.057 (Laboral)",
+      "dias_de_nota": ["MARTES", "VIERNES"],
+      "nota_rule": "Notificación automática los martes y viernes (Art. 133 CPCCBA y Acordada 4013 SCBA). Las notificaciones electrónicas se tienen por perfeccionadas el martes o viernes inmediato posterior a su disponibilidad.",
+      "grace_period_hours": "Cuatro (4) primeras horas del día hábil siguiente (Art. 124 CPCCBA - 08:00 a 12:00 hs).",
+      "default_answer_lawsuit_days": {
+        "ordinario": 15,
+        "sumario": 10,
+        "sumarisimo": 5,
+        "laboral_pba": 10
+      },
+      "caducidad_instancia_months": {
+        "01_penal": null,
+        "02_familia": 3,
+        "03_laboral": null,
+        "04_civil": 6,
+        "05_comercial_consumidor": 6,
+        "06_seguridad_social_salud": 3,
+        "07_contencioso_tributario": 6,
+        "sumario_o_sumarisimo": 3
+      },
+      "caducidad_notes": "En PBA (Art. 315 CPCCBA) antes de declarar la caducidad se intima por única vez a las partes para que en el término de 5 días manifiesten su intención de continuar con la acción y produzcan actividad procesal útil."
+    },
+    "CORDOBA": {
+      "name": "Provincia de Córdoba (TSJ Córdoba)",
+      "electronic_system": "SAC Multifuero (Sistema de Administración de Causas - Extranet Poder Judicial Córdoba)",
+      "procedural_code": "Código Procesal Civil y Comercial de Córdoba (Ley 8.465) / Ley 7.987 (Fuero Laboral)",
+      "dias_de_nota": ["MARTES", "VIERNES"],
+      "nota_rule": "Notificación ministerio legis martes y viernes (Art. 153 CPCC Córdoba) y régimen de cédula electrónica con plazo de gracia de 3 días hábiles desde la puesta a disposición en SAC.",
+      "grace_period_hours": "Dos (2) primeras horas de oficina del día hábil siguiente (Art. 53 CPCC Córdoba - Cargo de Hora).",
+      "default_answer_lawsuit_days": {
+        "ordinario": 10,
+        "abreviado": 6,
+        "ejecutivo": 3,
+        "laboral_cordoba": 6
+      },
+      "caducidad_instancia_months": {
+        "01_penal": null,
+        "02_familia": 6,
+        "03_laboral": 12,
+        "04_civil": 12,
+        "05_comercial_consumidor": 12,
+        "06_seguridad_social_salud": 6,
+        "07_contencioso_tributario": 6,
+        "segunda_instancia_o_incidente": 6
+      },
+      "caducidad_notes": "En Córdoba (Art. 339 Ley 8.465) la perención de primera instancia civil/comercial es de un (1) año (12 meses), y de seis (6) meses en segunda instancia e incidentes."
+    },
+    "SANTA_FE": {
+      "name": "Provincia de Santa Fe (CSJSF)",
+      "electronic_system": "SISFE (Sistema de Autoconsulta de Expedientes del Poder Judicial de Santa Fe)",
+      "procedural_code": "Código Procesal Civil y Comercial de Santa Fe (Ley 5.531) / Código Procesal Laboral (Ley 7.945)",
+      "dias_de_nota": ["MARTES", "VIERNES"],
+      "nota_rule": "Notificación automática en secretaría martes y viernes (Art. 61 CPCC Santa Fe) o por cédula digital SISFE.",
+      "grace_period_hours": "Día hábil inmediato siguiente hasta las 12:00 hs con pago de multa/cargo o primeras horas según circunscripción (Art. 70 CPCCSF).",
+      "default_answer_lawsuit_days": {
+        "ordinario": 15,
+        "sumario": 10,
+        "sumarisimo": 5,
+        "laboral_santa_fe": 10
+      },
+      "caducidad_instancia_months": {
+        "01_penal": null,
+        "02_familia": 6,
+        "03_laboral": 12,
+        "04_civil": 12,
+        "05_comercial_consumidor": 12,
+        "06_seguridad_social_salud": 6,
+        "07_contencioso_tributario": 6,
+        "justicia_comunitaria_o_incidentes": 6
+      },
+      "caducidad_notes": "En Santa Fe (Art. 232 CPCCSF) la caducidad se produce pasado un (1) año sin que se haya realizado ningún acto de procedimiento, y a los seis (6) meses en segunda instancia."
+    },
+    "MENDOZA": {
+      "name": "Provincia de Mendoza (Suprema Corte de Justicia de Mendoza)",
+      "electronic_system": "IURIX / Portal de Gestión de Causas Judiciales de Mendoza (Notificación Electrónica Acordada 28.144)",
+      "procedural_code": "Código Procesal Civil, Comercial y Tributario de Mendoza (Ley 9.001) / Código Procesal Laboral (Ley 2.144 y modif.)",
+      "dias_de_nota": ["LUNES", "JUEVES"],
+      "nota_rule": "En Mendoza (Art. 66 CPCCyT Ley 9.001) rige notificación por lista electrónica y cédula electrónica; tradicionalmente días de lista lunes y jueves o aparición en lista electrónica diaria.",
+      "grace_period_hours": "Secretaría Nocturna / dos (2) primeras horas del día hábil siguiente (Art. 61 CPCCyT Mendoza).",
+      "default_answer_lawsuit_days": {
+        "conocimiento_ordinario": 20,
+        "monitorio": 5,
+        "laboral_mendoza": 8
+      },
+      "caducidad_instancia_months": {
+        "01_penal": null,
+        "02_familia": 6,
+        "03_laboral": 12,
+        "04_civil": 6,
+        "05_comercial_consumidor": 6,
+        "06_seguridad_social_salud": 6,
+        "07_contencioso_tributario": 6
+      },
+      "caducidad_notes": "Bajo la Ley 9.001 (Art. 78), el plazo general de caducidad de primera o única instancia es de seis (6) meses."
+    },
+    "RESTO_PROVINCIAS": {
+      "name": "Resto de Jurisdicciones Provinciales Argentinas (Tucumán SAE, Entre Ríos Mesa Virtual, Salta, Neuquén, etc.)",
+      "electronic_system": "Portales Provinciales de Gestión Judicial (SAE, Iurix, Lex-Doctor Web, Dextra)",
+      "procedural_code": "Códigos Procesales Civiles, Comerciales y Laborales Provinciales (basados en el modelo CPCCN)",
+      "dias_de_nota": ["MARTES", "VIERNES"],
+      "nota_rule": "Regla general de notificación ministerio legis martes y viernes hábiles, sujeta a verificación en el código procesal local de la provincia interviniente.",
+      "grace_period_hours": "Dos (2) primeras horas hábiles del día siguiente (estándar procesal argentino).",
+      "default_answer_lawsuit_days": {
+        "ordinario": 15,
+        "sumario": 10,
+        "sumarisimo": 5,
+        "laboral": 10
+      },
+      "caducidad_instancia_months": {
+        "01_penal": null,
+        "02_familia": 3,
+        "03_laboral": null,
+        "04_civil": 6,
+        "05_comercial_consumidor": 6,
+        "06_seguridad_social_salud": 3,
+        "07_contencioso_tributario": 6
+      },
+      "caducidad_notes": "Se aplica preventivamente el umbral de alerta más estricto (3 meses en incidentes/familia y 6 meses en ordinarios) para proteger al ciudadano ante posibles vencimientos."
+    }
+  }
+}

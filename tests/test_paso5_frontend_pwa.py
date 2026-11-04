@@ -51,7 +51,9 @@ class TestPaso5FrontendPwaAndRateLimiter(unittest.TestCase):
         self.assertIn('id="btn-copy-email"', resp_index.text)
         self.assertIn('id="btn-download-pdf"', resp_index.text)
         self.assertIn('id="cases-dashboard-section"', resp_index.text)
-        self.assertIn('id="payment-prompt-card"', resp_index.text)
+        self.assertIn('id="social-paywall-card"', resp_index.text)
+        self.assertIn('id="btn-share-whatsapp"', resp_index.text)
+        self.assertIn('id="btn-pay-external"', resp_index.text)
         self.assertIn(
             "Legislación actualizada automáticamente todos los días a las 07:00 AM",
             resp_index.text,

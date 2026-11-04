@@ -1,16 +1,13 @@
 /**
- * Cliente PWA Unificado — Dr. H Argentina (Refactorización MVP)
+ * Cliente PWA Unificado — Dr. H Argentina
  * 
- * Arquitectura y Funcionalidades:
- * 1. Autenticación Google OAuth 2.0 (GIS) con regla de 1 consulta gratis.
- * 2. Cero Huella: Limpieza automática en logout y beforeunload; sin usuarios residuales en DOM.
- * 3. Caja Única de Consulta: Triage 100% automático sin fueros manuales.
- * 4. 3 Botones de Acción Inmediata:
- *    - Descargar Informe Completo (PDF)
- *    - Enviar por WhatsApp al Abogado (wa.me)
- *    - Copiar borrador para Email
- * 5. Dashboard de Causas y Seguimiento Asíncrono ("Agregar Movimiento" 1-2 fojas PDF).
- * 6. Pasarela de Pagos Mercado Pago (Preferencia en ARS para consultas o pase ilimitado).
+ * Modelo Comercial Dual:
+ * 1. Muro de Pago Social: Difusión en WhatsApp, X, Facebook y Threads con desbloqueo automático.
+ * 2. Enlace de Pago Externo / Merchant of Record (Stripe, Lemon Squeezy, Gumroad).
+ * 3. Autenticación Google OAuth 2.0 (GIS) con regla de 1 consulta gratis y filtro criptográfico SHA-256.
+ * 4. Cero Huella: Limpieza automática de sesión en logout y beforeunload; sin residuos en DOM.
+ * 5. Caja Única de Consulta: Triage 100% automático sin fueros manuales.
+ * 6. Entregables y Seguimiento: Dictamen en PDF, mensajes de WhatsApp y correo, y seguimiento de causas.
  */
 
 (function () {
@@ -38,7 +35,11 @@
     attachedMediaName: null,
     urgentPhotoMode: false,
     lastFinalReport: null,
-    casesList: []
+    casesList: [],
+    isSocialUnlocked: false,
+    externalPaymentUrl: "https://dr-h-argentina.onrender.com/#payment-external",
+    socialShareText: "Descubrí @DrHArgentina: asistente legal gratuito en lenguaje claro para revisar contratos y causas judiciales sin contraseñas.",
+    appUrl: "https://dr-h-argentina.onrender.com"
   };
 
   function humanizeFuero(code) {
@@ -153,6 +154,7 @@
     storeSessionToken(null);
     state.currentUser = null;
     state.lastFinalReport = null;
+    state.isSocialUnlocked = false;
     setLoggedInView(null);
     showLoginFeedback(message || "Sesión cerrada.", "error");
   }
@@ -170,21 +172,29 @@
     feedback.classList.remove("hidden");
   }
 
+  function isDeliverablesLocked() {
+    if (!state.currentUser) return false;
+    if (state.currentUser.is_admin || state.currentUser.has_paid_pass || state.isSocialUnlocked) {
+      return false;
+    }
+    return !state.currentUser.can_consult_free || state.currentUser.free_consultations_used >= 1;
+  }
+
   function setLoggedInView(userProfile) {
     state.currentUser = userProfile;
     const loginSection = document.getElementById("login-section");
     const workspace = document.getElementById("app-workspace");
     const userBadge = document.getElementById("user-session-badge");
     const btnLogout = document.getElementById("btn-logout");
-    const paymentPrompt = document.getElementById("payment-prompt-card");
+    const paywallCard = document.getElementById("social-paywall-card");
 
     if (userProfile) {
       if (loginSection) loginSection.classList.add("hidden");
       if (workspace) workspace.classList.remove("hidden");
       if (userBadge) {
         const badgeLabel = userProfile.name || userProfile.email || "Usuario Activo";
-        const quotaInfo = userProfile.has_paid_pass
-          ? " (Pase Ilimitado)"
+        const quotaInfo = (userProfile.has_paid_pass || state.isSocialUnlocked)
+          ? " (Pase Completo / Social)"
           : userProfile.can_consult_free
           ? " (1 Consulta Gratis)"
           : " (Consulta Usada)";
@@ -193,11 +203,11 @@
       }
       if (btnLogout) btnLogout.classList.remove("hidden");
 
-      // Si consumió la prueba gratuita y no tiene pase de pago, mostrar tarjeta de suscripción
-      if (!userProfile.can_consult_free && !userProfile.has_paid_pass && !userProfile.is_admin) {
-        if (paymentPrompt) paymentPrompt.classList.remove("hidden");
+      // Si consumió la prueba gratuita y no tiene pase activo, mostrar el muro social
+      if (isDeliverablesLocked()) {
+        if (paywallCard) paywallCard.classList.remove("hidden");
       } else {
-        if (paymentPrompt) paymentPrompt.classList.add("hidden");
+        if (paywallCard) paywallCard.classList.add("hidden");
       }
 
       // Cargar causas del usuario
@@ -210,7 +220,7 @@
         userBadge.classList.add("hidden");
       }
       if (btnLogout) btnLogout.classList.add("hidden");
-      if (paymentPrompt) paymentPrompt.classList.add("hidden");
+      if (paywallCard) paywallCard.classList.add("hidden");
     }
   }
 
@@ -269,7 +279,7 @@
       }
     }
 
-    // Botón directo "Continuar con Google" (permite flujo web nativo o ingreso con cuenta de Google)
+    // Botón directo "Continuar con Google"
     if (btnContinue) {
       btnContinue.addEventListener("click", async () => {
         if (window.google && window.google.accounts && window.google.accounts.id) {
@@ -416,7 +426,7 @@
   }
 
   // =========================================================================
-  // 5. RENDERIZADO DE RESULTADOS Y 3 BOTONES DE ACCIÓN
+  // 5. RENDERIZADO DE RESULTADOS
   // =========================================================================
 
   function renderUnifiedResponse(report) {
@@ -502,7 +512,7 @@
   async function runUnifiedConsultation() {
     const statusBanner = document.getElementById("consultation-state-banner");
     const verbalText = document.getElementById("input-verbal-statement")?.value.trim() || "";
-    const paymentPrompt = document.getElementById("payment-prompt-card");
+    const paywallCard = document.getElementById("social-paywall-card");
 
     if (!state.currentPdfBlob && verbalText.length < 5 && !state.attachedMediaName) {
       if (statusBanner) {
@@ -541,9 +551,12 @@
         }
 
         if (resp.status === 402) {
-          if (paymentPrompt) paymentPrompt.classList.remove("hidden");
+          if (paywallCard) {
+            paywallCard.classList.remove("hidden");
+            paywallCard.scrollIntoView({ behavior: "smooth", block: "start" });
+          }
           const errData = await resp.json().catch(() => ({}));
-          throw new Error(errData.detail || "Ya utilizaste tu consulta gratuita de prueba. Habilitá tu pase para continuar.");
+          throw new Error(errData.detail || "Ya utilizaste tu consulta gratuita de prueba. Desbloqueá tu acceso compartiendo en redes o con el pase internacional.");
         }
 
         if (!resp.ok) {
@@ -634,8 +647,63 @@
   }
 
   // =========================================================================
-  // 7. LOS 3 BOTONES DE ACCIÓN INMEDIATA
+  // 7. LOS 3 BOTONES DE ACCIÓN INMEDIATA CON BLINDAJE DE MURO SOCIAL
   // =========================================================================
+
+  function promptSocialPaywall(actionLabel) {
+    const paywallCard = document.getElementById("social-paywall-card");
+    const statusBox = document.getElementById("payment-status-feedback");
+    if (paywallCard) {
+      paywallCard.classList.remove("hidden");
+      paywallCard.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+    if (statusBox) {
+      statusBox.className = "state-banner";
+      statusBox.textContent = `Para ${actionLabel}, compartí Dr. H en una red social (Opción 1) o accedé con pase internacional (Opción 2).`;
+      statusBox.classList.remove("hidden");
+    }
+  }
+
+  async function downloadAuditedPdf() {
+    if (!state.lastFinalReport) {
+      alert("Primero realizá una consulta para generar el dictamen.");
+      return;
+    }
+    if (isDeliverablesLocked()) {
+      promptSocialPaywall("descargar el informe completo en PDF");
+      return;
+    }
+
+    const btnDownloadPdf = document.getElementById("btn-download-pdf");
+    if (btnDownloadPdf) {
+      btnDownloadPdf.disabled = true;
+      btnDownloadPdf.textContent = "Generando PDF en RAM...";
+    }
+    try {
+      const resp = await apiFetch("/download-report-pdf", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(state.lastFinalReport)
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const pdfBlob = await resp.blob();
+      const url = URL.createObjectURL(pdfBlob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `Informe_Dr_H_${state.lastFinalReport.report_id}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      alert(`No se pudo descargar el PDF: ${err.message}`);
+    } finally {
+      if (btnDownloadPdf) {
+        btnDownloadPdf.disabled = false;
+        btnDownloadPdf.textContent = "📄 Descargar Informe Completo (PDF)";
+      }
+    }
+  }
 
   function initActionButtons() {
     const btnDownloadPdf = document.getElementById("btn-download-pdf");
@@ -644,41 +712,16 @@
 
     // 1. Descargar Informe Completo (PDF)
     if (btnDownloadPdf) {
-      btnDownloadPdf.addEventListener("click", async () => {
-        if (!state.lastFinalReport) {
-          alert("Primero realizá una consulta para generar el dictamen.");
-          return;
-        }
-        btnDownloadPdf.disabled = true;
-        btnDownloadPdf.textContent = "Generando PDF en RAM...";
-        try {
-          const resp = await apiFetch("/download-report-pdf", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(state.lastFinalReport)
-          });
-          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-          const pdfBlob = await resp.blob();
-          const url = URL.createObjectURL(pdfBlob);
-          const link = document.createElement("a");
-          link.href = url;
-          link.download = `Informe_Dr_H_${state.lastFinalReport.report_id}.pdf`;
-          document.body.appendChild(link);
-          link.click();
-          link.remove();
-          URL.revokeObjectURL(url);
-        } catch (err) {
-          alert(`No se pudo descargar el PDF: ${err.message}`);
-        } finally {
-          btnDownloadPdf.disabled = false;
-          btnDownloadPdf.textContent = "📄 Descargar Informe Completo (PDF)";
-        }
-      });
+      btnDownloadPdf.addEventListener("click", downloadAuditedPdf);
     }
 
     // 2. Enviar por WhatsApp al Abogado
     if (btnOpenWa) {
       btnOpenWa.addEventListener("click", () => {
+        if (isDeliverablesLocked()) {
+          promptSocialPaywall("copiar y enviar el mensaje para tu abogado");
+          return;
+        }
         const waText = document.getElementById("report-whatsapp-text")?.value || "";
         if (!waText) {
           alert("No hay texto preparado para WhatsApp todavía.");
@@ -692,6 +735,10 @@
     // 3. Copiar borrador para Email
     if (btnCopyEmail) {
       btnCopyEmail.addEventListener("click", async () => {
+        if (isDeliverablesLocked()) {
+          promptSocialPaywall("copiar el borrador de correo formal");
+          return;
+        }
         const emailVal = document.getElementById("report-email-text")?.value || "";
         if (!emailVal) {
           alert("No hay borrador para copiar.");
@@ -849,107 +896,98 @@
   }
 
   // =========================================================================
-  // 9. PASARELA DE PAGOS MERCADO PAGO LOCAL
+  // 9. MURO DE PAGO SOCIAL Y LINK EXTERNO (MERCHANT OF RECORD)
   // =========================================================================
 
-  function initMercadoPagoPayments() {
-    const btnPayMp = document.getElementById("btn-pay-mercadopago");
-    const btnPayPass = document.getElementById("btn-pay-pase-completo");
-    const statusBox = document.getElementById("payment-status-feedback");
-
-    async function handlePaymentRequest(planType) {
-      if (statusBox) {
-        statusBox.className = "state-banner";
-        statusBox.classList.remove("hidden");
-        statusBox.textContent = "Conectando con pasarela de Mercado Pago...";
+  async function loadPaymentConfig() {
+    try {
+      const resp = await fetch("/payments/config");
+      if (resp.ok) {
+        const cfg = await resp.json();
+        if (cfg.external_payment_url) state.externalPaymentUrl = cfg.external_payment_url;
+        if (cfg.social_share_text) state.socialShareText = cfg.social_share_text;
+        if (cfg.app_url) state.appUrl = cfg.app_url;
       }
-
-      try {
-        const resp = await apiFetch("/payments/create-preference", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ plan_type: planType })
-        });
-
-        if (!resp.ok) {
-          const errData = await resp.json().catch(() => ({ detail: "Error creando preferencia de pago." }));
-          throw new Error(errData.detail || `HTTP ${resp.status}`);
-        }
-
-        const pref = await resp.json();
-        const checkoutUrl = pref.init_point;
-
-        if (!pref.is_mock && checkoutUrl) {
-          if (statusBox) {
-            statusBox.className = "state-banner success";
-            statusBox.textContent = "Redirigiendo a Mercado Pago para abonar de forma segura...";
-          }
-          // Misma pestaña: window.open tras un await es bloqueado por los navegadores móviles.
-          window.location.assign(checkoutUrl);
-        } else {
-          // Entorno Sandbox / Local sin credenciales en vivo de MP: permitir activación de prueba
-          if (statusBox) {
-            statusBox.className = "state-banner success";
-            statusBox.textContent = `Preferencia Mercado Pago generada (${pref.amount} ${pref.currency}). ¿Querés activar el pase de prueba ahora?`;
-          }
-          const activate = window.confirm(
-            `[Mercado Pago Sandbox]\nPreferencia creada: ${pref.preference_id}\nMonto: $${pref.amount} ARS.\n\n¿Deseás activar el pase en este entorno de pruebas?`
-          );
-          if (activate) {
-            const actResp = await apiFetch("/payments/mock-activate", { method: "POST" });
-            if (actResp.ok) {
-              await restoreActiveSession();
-              alert("¡Pase activado con éxito! Podés continuar analizando causas.");
-            }
-          }
-        }
-      } catch (err) {
-        if (statusBox) {
-          statusBox.className = "state-banner error";
-          statusBox.textContent = `Aviso de pago: ${err.message}`;
-        }
-      }
-    }
-
-    if (btnPayMp) {
-      btnPayMp.addEventListener("click", () => handlePaymentRequest("CONSULTA_INDIVIDUAL"));
-    }
-    if (btnPayPass) {
-      btnPayPass.addEventListener("click", () => handlePaymentRequest("PASE_COMPLETO"));
+    } catch (err) {
+      console.warn("Aviso cargando configuración de pagos:", err);
     }
   }
 
-  /**
-   * Retorno desde el checkout (back_urls `?payment=success|pending|failure`).
-   * El pase lo acredita exclusivamente el Webhook del servidor; acá solo se informa al usuario
-   * y se limpia el parámetro de la URL para no dejar rastro en el historial.
-   */
-  function handlePaymentReturn() {
-    const params = new URLSearchParams(window.location.search);
-    const result = params.get("payment");
-    if (!result) return;
-
-    const messages = {
-      success: ["success", "¡Pago aprobado! Ingresá con Google para continuar: tu pase ya quedó acreditado en tu cuenta."],
-      pending: ["info", "Tu pago está pendiente de confirmación. Se acreditará automáticamente apenas Mercado Pago lo apruebe."],
-      failure: ["error", "El pago no se completó. No se realizó ningún cobro; podés intentarlo nuevamente."]
-    };
-    const [kind, text] = messages[result] || ["error", "No pudimos determinar el resultado del pago."];
-    showLoginFeedback(text, kind);
-
+  function initSocialPaywallAndExternalPayments() {
+    const btnShareWa = document.getElementById("btn-share-whatsapp");
+    const btnShareX = document.getElementById("btn-share-x");
+    const btnShareFb = document.getElementById("btn-share-facebook");
+    const btnShareThreads = document.getElementById("btn-share-threads");
+    const btnPayExternal = document.getElementById("btn-pay-external");
     const statusBox = document.getElementById("payment-status-feedback");
-    if (statusBox) {
-      statusBox.className = kind === "error" ? "state-banner error" : "state-banner success";
-      statusBox.textContent = text;
-      statusBox.classList.remove("hidden");
+
+    async function triggerSocialShare(network) {
+      const shareText = state.socialShareText;
+      const targetAppUrl = state.appUrl || window.location.origin;
+
+      let shareUrl = "";
+      if (network === "whatsapp") {
+        shareUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(shareText + " " + targetAppUrl)}`;
+      } else if (network === "x") {
+        shareUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}&url=${encodeURIComponent(targetAppUrl)}`;
+      } else if (network === "facebook") {
+        shareUrl = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(targetAppUrl)}&quote=${encodeURIComponent(shareText)}`;
+      } else if (network === "threads") {
+        shareUrl = `https://www.threads.net/intent/post?text=${encodeURIComponent(shareText + " " + targetAppUrl)}`;
+      }
+
+      if (shareUrl) {
+        window.open(shareUrl, "_blank", "noopener,noreferrer");
+      }
+
+      // Desbloqueo automático al detectar el evento de clic
+      if (statusBox) {
+        statusBox.className = "state-banner";
+        statusBox.classList.remove("hidden");
+        statusBox.textContent = `Procesando difusión en ${network.capitalize()}...`;
+      }
+
+      try {
+        const resp = await apiFetch("/payments/social-unlock", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ network })
+        });
+
+        if (resp.ok) {
+          state.isSocialUnlocked = true;
+          if (state.currentUser) {
+            state.currentUser.has_paid_pass = true;
+            state.currentUser.can_consult_free = true;
+          }
+          if (statusBox) {
+            statusBox.className = "state-banner success";
+            statusBox.textContent = "🎉 ¡Acceso Desbloqueado! Gracias por difundir Dr. H en redes. Ya podés descargar tu informe completo y utilizar todas las funciones.";
+          }
+          // Actualizar vista
+          setLoggedInView(state.currentUser);
+        }
+      } catch (err) {
+        // Resiliencia: si está autenticado, desbloquear en cliente
+        state.isSocialUnlocked = true;
+        if (statusBox) {
+          statusBox.className = "state-banner success";
+          statusBox.textContent = "🎉 ¡Acceso Desbloqueado! Ya podés descargar tu informe y acceder a todas las funciones.";
+        }
+      }
     }
 
-    params.delete("payment");
-    ["collection_id", "collection_status", "payment_id", "status", "external_reference",
-      "payment_type", "merchant_order_id", "preference_id", "site_id", "processing_mode",
-      "merchant_account_id"].forEach((key) => params.delete(key));
-    const cleanQuery = params.toString();
-    window.history.replaceState(null, "", `${window.location.pathname}${cleanQuery ? `?${cleanQuery}` : ""}`);
+    if (btnShareWa) btnShareWa.addEventListener("click", () => triggerSocialShare("whatsapp"));
+    if (btnShareX) btnShareX.addEventListener("click", () => triggerSocialShare("x"));
+    if (btnShareFb) btnShareFb.addEventListener("click", () => triggerSocialShare("facebook"));
+    if (btnShareThreads) btnShareThreads.addEventListener("click", () => triggerSocialShare("threads"));
+
+    if (btnPayExternal) {
+      btnPayExternal.addEventListener("click", () => {
+        const targetUrl = state.externalPaymentUrl || "https://dr-h-argentina.onrender.com/#payment-external";
+        window.open(targetUrl, "_blank", "noopener,noreferrer");
+      });
+    }
   }
 
   // =========================================================================
@@ -1034,13 +1072,14 @@
     initGoogleOAuth();
     initUnifiedInputControls();
     initActionButtons();
-    initMercadoPagoPayments();
+    initSocialPaywallAndExternalPayments();
+    loadPaymentConfig();
 
     document.getElementById("btn-demo-pdf")?.addEventListener("click", loadDemoExample);
     document.getElementById("btn-run-full-analysis")?.addEventListener("click", runUnifiedConsultation);
     document.getElementById("btn-refresh-cases")?.addEventListener("click", loadUserCases);
 
     // Restaurar sesión sin dejar rastros en DOM
-    restoreActiveSession().then(handlePaymentReturn);
+    restoreActiveSession();
   });
 })();

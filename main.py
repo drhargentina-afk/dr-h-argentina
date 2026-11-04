@@ -17,7 +17,7 @@ import hashlib
 import json
 import logging
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import fitz  # PyMuPDF
 from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile, status
@@ -27,6 +27,7 @@ from fastapi.openapi.utils import get_openapi
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, ConfigDict, Field
 
 from auditor_revision.report_builder import CitizenReportBuilder
 from core.admin_auth import (
@@ -47,15 +48,6 @@ from core.auth_oauth import (
 from core.case_tracker import CaseTrackerService
 from core.config import ApiKeyLeakGuardMiddleware
 from core.database import DrHDatabase
-from core.mercadopago_gateway import (
-    CreatePreferenceRequest,
-    CreatePreferenceResponse,
-    MercadoPagoError,
-    MercadoPagoGateway,
-    MercadoPagoStatus,
-    WebhookResult,
-    WebhookSignatureError,
-)
 from core.models import (
     BoletinOficialNormInput,
     EmergencyScanRequest,
@@ -93,13 +85,6 @@ app.add_middleware(
 orchestrator = Agente000Orchestrator()
 db = DrHDatabase(orchestrator.security_config.database_url or None)
 google_auth = GoogleOAuthManager(orchestrator.security_config, db)
-mp_gateway = MercadoPagoGateway(
-    access_token=orchestrator.security_config.mercadopago_access_token.get_secret_value(),
-    public_key=orchestrator.security_config.mercadopago_public_key,
-    db=db,
-    webhook_secret=orchestrator.security_config.mercadopago_webhook_secret.get_secret_value(),
-    public_base_url=orchestrator.security_config.public_base_url,
-)
 case_tracker = CaseTrackerService(db, orchestrator)
 
 admin_sessions = AdminSessionManager(
@@ -580,84 +565,60 @@ async def add_movement_endpoint(
 
 
 # =========================================================================
-# PASARELA DE PAGOS MERCADO PAGO (ARS)
+# MODELO COMERCIAL DUAL: PAGO SOCIAL Y LINK EXTERNO (MERCHANT OF RECORD)
 # =========================================================================
 
-@app.post("/payments/create-preference", response_model=CreatePreferenceResponse, tags=["Pagos Mercado Pago"])
-async def create_preference_endpoint(
-    req: CreatePreferenceRequest,
-    user: Annotated[UserProfileResponse, Depends(get_current_user)],
-) -> CreatePreferenceResponse:
-    """Genera una preferencia de pago y devuelve el `init_point` del checkout de Mercado Pago."""
-    try:
-        return mp_gateway.create_preference(
-            user_email=user.email,
-            plan_type=req.plan_type,
-            case_id=req.case_id,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    except MercadoPagoError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+class PaymentConfigResponse(BaseModel):
+    """Configuración de monetización y enlace de pago externo / MoR."""
+    model_config = ConfigDict(extra="forbid")
+    external_payment_url: str
+    social_share_text: str
+    app_url: str
 
 
-@app.post("/payments/webhook", response_model=WebhookResult, tags=["Pagos Mercado Pago"])
-async def payments_webhook_endpoint(request: Request) -> WebhookResult:
-    """Recibe la notificación de Mercado Pago, verifica el pago en la API y acredita si está aprobado.
+class SocialUnlockRequest(BaseModel):
+    """Notificación de evento de difusión social para desbloqueo automático."""
+    model_config = ConfigDict(extra="forbid")
+    network: str = Field(default="whatsapp", description="Red social donde se compartió (whatsapp, x, facebook, threads).")
 
-    Códigos: 200 = procesado/ignorado (MP no reintenta); 401 = firma inválida;
-    502 = fallo consultando a MP (MP reintenta automáticamente).
-    """
-    raw_body = await request.body()
-    body: dict[str, Any] = {}
-    if raw_body.strip():
-        try:
-            parsed_body = json.loads(raw_body)
-        except json.JSONDecodeError as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cuerpo JSON inválido.") from exc
-        if not isinstance(parsed_body, dict):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El cuerpo debe ser un objeto JSON.")
-        body = parsed_body
 
-    try:
-        result = mp_gateway.process_webhook(
-            query_params=dict(request.query_params),
-            body=body,
-            x_signature=request.headers.get("x-signature"),
-            x_request_id=request.headers.get("x-request-id"),
-        )
-    except WebhookSignatureError as exc:
-        _main_logger.warning("Webhook de Mercado Pago rechazado por firma inválida: %s", exc)
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
-    except MercadoPagoError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+class SocialUnlockResponse(BaseModel):
+    """Confirmación de desbloqueo de acceso completo."""
+    model_config = ConfigDict(extra="forbid")
+    status: Literal["UNLOCKED"] = "UNLOCKED"
+    message: str
+    user_email: str
+    has_paid_pass: bool
 
-    _main_logger.info(
-        "Webhook MP procesado: status=%s payment_id=%s plan=%s", result.status, result.payment_id, result.plan_type
+
+@app.get("/payments/config", response_model=PaymentConfigResponse, tags=["Monetización Dual"])
+async def payments_config_endpoint() -> PaymentConfigResponse:
+    """Devuelve la URL externa de pago (Gumroad, Lemon Squeezy, Stripe) y el texto promocional para redes."""
+    ext_url = orchestrator.security_config.external_payment_url
+    return PaymentConfigResponse(
+        external_payment_url=ext_url,
+        social_share_text=(
+            "Descubrí @DrHArgentina: asistente legal gratuito en lenguaje claro para revisar "
+            "contratos y expedientes judiciales sin contraseñas."
+        ),
+        app_url="https://dr-h-argentina.onrender.com",
     )
-    return result
 
 
-@app.get("/payments/status", response_model=MercadoPagoStatus, tags=["Pagos Mercado Pago"])
-async def payments_status_endpoint(
-    _user: Annotated[UserProfileResponse, Depends(get_current_user)],
-) -> MercadoPagoStatus:
-    """Diagnóstico de la pasarela: permite confirmar que Render inyectó MP_ACCESS_TOKEN / MP_PUBLIC_KEY."""
-    return mp_gateway.status_snapshot()
-
-
-@app.post("/payments/mock-activate", tags=["Pagos Mercado Pago"])
-async def mock_activate_endpoint(
+@app.post("/payments/social-unlock", response_model=SocialUnlockResponse, tags=["Monetización Dual"])
+async def payments_social_unlock_endpoint(
+    req: SocialUnlockRequest,
     user: Annotated[UserProfileResponse, Depends(get_current_user)],
-) -> dict[str, Any]:
-    """Activa el pase SOLO en modo MOCK (local/tests). Deshabilitado cuando hay credenciales reales de MP."""
-    if mp_gateway.is_live:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="La activación simulada no está disponible con la pasarela de Mercado Pago activa.",
-        )
+) -> SocialUnlockResponse:
+    """Desbloquea el acceso completo (descarga de dictamen, entregables y causas) tras compartir en redes."""
     db.set_user_paid_pass(user.email, True)
-    return {"status": "SUCCESS", "message": f"Pase completo activado para {user.email}"}
+    _main_logger.info("Pase desbloqueado por pago social para %s (red: %s)", user.email, req.network)
+    return SocialUnlockResponse(
+        status="UNLOCKED",
+        message=f"¡Pase desbloqueado con éxito tras difundir en {req.network.capitalize()}! Ya podés descargar tu informe.",
+        user_email=user.email,
+        has_paid_pass=True,
+    )
 
 
 # =========================================================================

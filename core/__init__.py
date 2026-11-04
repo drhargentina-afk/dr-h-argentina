@@ -43,15 +43,6 @@ from core.auth_oauth import (
 from core.case_tracker import CaseTrackerService
 from core.config import ApiKeyLeakGuardMiddleware, ServerSecurityConfig
 from core.database import DrHDatabase
-from core.mercadopago_gateway import (
-    CreatePreferenceRequest,
-    CreatePreferenceResponse,
-    MercadoPagoError,
-    MercadoPagoGateway,
-    MercadoPagoStatus,
-    WebhookResult,
-    WebhookSignatureError,
-)
 from core.privacy_anonymizer import PrivacyAnonymizer, SessionAnonymizerMap
 from core.rate_limiter_queue import (
     QueueStatusSnapshot,
@@ -75,8 +66,6 @@ __all__ = [
     "CaseContext",
     "CaseTrackerService",
     "ContradictionFinding",
-    "CreatePreferenceRequest",
-    "CreatePreferenceResponse",
     "DrHDatabase",
     "EmergencyScanRequest",
     "EmergencyScanResponse",
@@ -90,9 +79,6 @@ __all__ = [
     "GoogleAuthRequest",
     "GoogleAuthResponse",
     "GoogleOAuthManager",
-    "MercadoPagoError",
-    "MercadoPagoGateway",
-    "MercadoPagoStatus",
     "PreQuoteResponse",
     "PreliminaryMoneyCalculation",
     "PrivacyAnonymizer",
@@ -107,7 +93,5 @@ __all__ = [
     "SubscriptionTier",
     "UserRole",
     "VolatileExpedienteSession",
-    "WebhookResult",
-    "WebhookSignatureError",
     "ZeroStorageDriveManager",
 ]

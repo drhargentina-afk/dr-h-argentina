@@ -446,24 +446,58 @@
 
     <!-- ÁREA DE CONSULTA Y SEGUIMIENTO -->
     <div id="app-workspace" class="hidden" style="display:flex;flex-direction:column;gap:1.5rem;">
-      <!-- TARJETA DE PAGO MERCADO PAGO (SI LA CUOTA GRATIS FUE CONSUMIDA) -->
-      <section id="payment-prompt-card" class="panel-card hidden" style="border:2px solid var(--accent-brand);">
+      <!-- MURO DE PAGO SOCIAL Y ACCESO INTERNACIONAL (GUMROAD/STRIPE) -->
+      <section id="social-paywall-card" class="panel-card hidden" style="border:2px solid var(--accent-brand);">
         <div class="panel-header">
           <div>
-            <h2>Consulta Gratuita Utilizada</h2>
-            <p style="font-size:0.9rem;color:var(--text-secondary);">
-              Ya utilizaste tu consulta gratuita de prueba. Habilitá tu pase para continuar analizando causas.
+            <h2>Muro de Pago Social & Acceso Internacional</h2>
+            <p style="font-size:0.9rem;color:var(--text-secondary);margin-top:0.25rem;">
+              Tu primera consulta fue procesada. Para desbloquear las descargas y seguir analizando expedientes, elegí cómo acceder:
             </p>
           </div>
         </div>
-        <div style="display:flex;gap:0.75rem;flex-wrap:wrap;align-items:center;">
-          <button id="btn-pay-mercadopago" type="button" class="btn btn-primary btn-large">
-            💳 Abonar Consulta con Mercado Pago ($9.500 ARS)
-          </button>
-          <button id="btn-pay-pase-completo" type="button" class="btn btn-secondary">
-            Pase Completo y Seguimiento Ilimitado ($24.500 ARS)
-          </button>
+
+        <!-- Opción 1: Pago Social (Gratuito al compartir) -->
+        <div style="background-color:var(--bg-elevated);border:1px solid var(--border-subtle);border-radius:var(--radius-md);padding:1.1rem;display:flex;flex-direction:column;gap:0.75rem;">
+          <div style="display:flex;align-items:center;gap:0.5rem;">
+            <strong style="font-size:1.02rem;">Opción 1: Pago Social (Gratis)</strong>
+            <span class="user-pill" style="background-color:var(--ok-surface);color:var(--status-ok);font-size:0.75rem;">100% Bonificado</span>
+          </div>
+          <p style="font-size:0.88rem;color:var(--text-secondary);">
+            Ayudanos a difundir Dr. H compartiendo en cualquiera de tus redes. Al hacer clic en un botón, tus descargas y causas se desbloquean al instante:
+          </p>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));gap:0.65rem;">
+            <button id="btn-share-whatsapp" type="button" class="btn btn-primary" style="background-color:#25D366;border-color:#25D366;color:#ffffff;">
+              💬 Compartir en WhatsApp
+            </button>
+            <button id="btn-share-x" type="button" class="btn btn-secondary">
+              ✖️ Compartir en X
+            </button>
+            <button id="btn-share-facebook" type="button" class="btn btn-secondary" style="border-color:#1877F2;color:#1877F2;">
+              📘 Compartir en Facebook
+            </button>
+            <button id="btn-share-threads" type="button" class="btn btn-secondary">
+              🧵 Compartir en Threads
+            </button>
+          </div>
         </div>
+
+        <!-- Opción 2: Pago Internacional Anónimo (MoR) -->
+        <div style="background-color:var(--bg-elevated);border:1px solid var(--border-subtle);border-radius:var(--radius-md);padding:1.1rem;display:flex;flex-direction:column;gap:0.75rem;">
+          <div style="display:flex;align-items:center;gap:0.5rem;">
+            <strong style="font-size:1.02rem;">Opción 2: Pago Internacional Anónimo (USD)</strong>
+            <span class="user-pill" style="font-size:0.75rem;">Merchant of Record</span>
+          </div>
+          <p style="font-size:0.88rem;color:var(--text-secondary);">
+            Si preferís no compartir en redes y abonar el canon por expediente o pase mensual anónimo en dólares:
+          </p>
+          <div>
+            <button id="btn-pay-external" type="button" class="btn btn-secondary btn-large" style="font-weight:700;">
+              💳 Abonar Pase Internacional (Stripe / Lemon Squeezy / Gumroad)
+            </button>
+          </div>
+        </div>
+
         <div id="payment-status-feedback" class="state-banner hidden"></div>
       </section>
 

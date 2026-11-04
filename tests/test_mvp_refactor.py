@@ -220,8 +220,8 @@ class TestMvpRefactorRoadmap(unittest.TestCase):
         detail = resp_detail.json()
         self.assertGreaterEqual(len(detail["movements"]), 1)
 
-    def test_mercadopago_preference_creation_and_paid_pass(self) -> None:
-        """Verifica la pasarela de pagos de Mercado Pago en ARS y la activación de pase."""
+    def test_social_unlock_and_external_payment_config(self) -> None:
+        """Verifica el modelo dual: Muro de Pago Social con desbloqueo y URL externa de pago."""
         u_tag = uuid.uuid4().hex[:8]
         user_email = f"elena_{u_tag}@gmail.com"
 
@@ -233,47 +233,32 @@ class TestMvpRefactorRoadmap(unittest.TestCase):
         token = login.json()["access_token"]
         headers = {"Authorization": f"Bearer {token}"}
 
-        # 1. Crear preferencia para consulta individual ($9.500 ARS)
-        resp_pref_single = self.client.post(
-            "/payments/create-preference",
-            json={"plan_type": "SINGLE_CONSULTATION"},
-            headers=headers,
-        )
-        self.assertEqual(resp_pref_single.status_code, 200)
-        pref1 = resp_pref_single.json()
-        self.assertEqual(pref1["currency"], "ARS")
-        self.assertEqual(pref1["amount"], "9500.00")
-        self.assertTrue(pref1["init_point"].startswith("http"))
+        # 1. Consultar configuración de pagos y enlace externo (MoR)
+        resp_cfg = self.client.get("/payments/config")
+        self.assertEqual(resp_cfg.status_code, 200)
+        cfg_data = resp_cfg.json()
+        self.assertIn("external_payment_url", cfg_data)
+        self.assertIn("social_share_text", cfg_data)
+        self.assertIn("app_url", cfg_data)
 
-        # 2. Crear preferencia para pase ilimitado ($24.500 ARS)
-        resp_pref_pass = self.client.post(
-            "/payments/create-preference",
-            json={"plan_type": "UNLIMITED_PASS"},
-            headers=headers,
-        )
-        self.assertEqual(resp_pref_pass.status_code, 200)
-        pref2 = resp_pref_pass.json()
-        self.assertEqual(pref2["amount"], "24500.00")
-
-        # 3. Webhook en modo MOCK: sin verificación contra la API de MP nunca se acredita nada
-        resp_webhook = self.client.post(
-            "/payments/webhook",
-            json={
-                "type": "payment",
-                "data": {"id": "1234567890"},
-            },
-        )
-        self.assertEqual(resp_webhook.status_code, 200)
-        self.assertEqual(resp_webhook.json()["status"], "IGNORED")
-        self.assertFalse(self.client.get("/auth/me", headers=headers).json()["has_paid_pass"])
-
-        # 4. Activar pase y verificar que el usuario pueda consultar sin límite
-        resp_activate = self.client.post("/payments/mock-activate", headers=headers)
-        self.assertEqual(resp_activate.status_code, 200)
-
-        # Ahora el perfil muestra has_paid_pass=True
+        # 2. Inicialmente el usuario no tiene pase pago
         resp_me = self.client.get("/auth/me", headers=headers)
-        self.assertTrue(resp_me.json()["has_paid_pass"])
+        self.assertFalse(resp_me.json()["has_paid_pass"])
+
+        # 3. Pago Social: el usuario comparte en una red social (WhatsApp, X, Facebook, Threads)
+        resp_unlock = self.client.post(
+            "/payments/social-unlock",
+            json={"network": "whatsapp"},
+            headers=headers,
+        )
+        self.assertEqual(resp_unlock.status_code, 200)
+        unlock_data = resp_unlock.json()
+        self.assertEqual(unlock_data["status"], "UNLOCKED")
+        self.assertTrue(unlock_data["has_paid_pass"])
+
+        # 4. Ahora el perfil muestra has_paid_pass=True y can_consult_free=False (desbloqueado con pase)
+        resp_me_after = self.client.get("/auth/me", headers=headers)
+        self.assertTrue(resp_me_after.json()["has_paid_pass"])
 
 
 if __name__ == "__main__":

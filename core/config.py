@@ -87,21 +87,9 @@ class ServerSecurityConfig(BaseModel):
     )
     admin_session_ttl_hours: int = Field(default=12, ge=1, le=168)
     google_client_id: str = Field(default="", description="Client ID de Google Identity Services OAuth 2.0.")
-    mercadopago_access_token: SecretStr = Field(
-        default=SecretStr(""),
-        description="Token privado de Mercado Pago (MP_ACCESS_TOKEN; alias MERCADOPAGO_ACCESS_TOKEN).",
-    )
-    mercadopago_public_key: str = Field(
-        default="",
-        description="Public Key de Mercado Pago (MP_PUBLIC_KEY; alias MERCADOPAGO_PUBLIC_KEY).",
-    )
-    mercadopago_webhook_secret: SecretStr = Field(
-        default=SecretStr(""),
-        description="Clave secreta de firma de Webhooks de Mercado Pago (MP_WEBHOOK_SECRET).",
-    )
-    public_base_url: str = Field(
-        default="https://dr-h-argentina.onrender.com",
-        description="URL pública del servicio, usada para las back_urls del checkout (PUBLIC_BASE_URL).",
+    external_payment_url: str = Field(
+        default="https://gumroad.com",
+        description="URL externa de pago anónimo/MoR (Gumroad, Lemon Squeezy, Stripe) configurada en EXTERNAL_PAYMENT_URL.",
     )
     database_url: str = Field(default="", description="Ruta de base de datos SQLite o DATABASE_URL PostgreSQL.")
     node_country: str = Field(default="AR", min_length=2, max_length=2)
@@ -145,13 +133,10 @@ class ServerSecurityConfig(BaseModel):
             admin_password=_resolve_admin_password(_get("ADMIN_PASSWORD", "")),
             admin_session_ttl_hours=ttl_hours,
             google_client_id=_get("GOOGLE_CLIENT_ID", "").strip(),
-            # Render inyecta MP_ACCESS_TOKEN / MP_PUBLIC_KEY; se aceptan los nombres largos como alias.
-            mercadopago_access_token=SecretStr(
-                (_get("MP_ACCESS_TOKEN") or _get("MERCADOPAGO_ACCESS_TOKEN", "")).strip()
-            ),
-            mercadopago_public_key=(_get("MP_PUBLIC_KEY") or _get("MERCADOPAGO_PUBLIC_KEY", "")).strip(),
-            mercadopago_webhook_secret=SecretStr(_get("MP_WEBHOOK_SECRET", "").strip()),
-            public_base_url=_get("PUBLIC_BASE_URL", "https://dr-h-argentina.onrender.com").strip().rstrip("/"),
+            external_payment_url=_get(
+                "EXTERNAL_PAYMENT_URL",
+                "https://dr-h-argentina.onrender.com/#payment-external",
+            ).strip(),
             database_url=_get("DATABASE_URL", "").strip(),
             node_country=_get("DR_H_NODE_COUNTRY", "AR"),
             platform_version=_get("DR_H_PLATFORM_VERSION", "1.4.0-AR-PWA"),

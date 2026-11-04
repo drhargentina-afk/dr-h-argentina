@@ -11,13 +11,14 @@
         document.querySelector('meta[name="color-scheme"]').content = savedScheme;
       }
     } catch (err) {
-      console.warn("Preferencia de esquema de color en modo sistema:", err);
+      console.warn("Preferencia de esquema de color:", err);
     }
   </script>
   <title>Dr. H Argentina — Tu Asistente Legal en Lenguaje Claro</title>
-  <meta name="description" content="Consultá tu caso en palabras simples, revisá documentos antes de firmar y recibí respuestas claras para hablar con tu abogado.">
+  <meta name="description" content="Consultá tu caso en palabras simples, revisá documentos antes de firmar y hacé seguimiento asíncrono de tus causas sin contraseñas judiciales.">
   <meta name="theme-color" content="#1c2541">
   <link rel="manifest" href="/manifest.json">
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
   <style>
     :root {
       color-scheme: light dark;
@@ -75,7 +76,7 @@
     }
 
     .header-inner {
-      max-width: 920px;
+      max-width: 960px;
       margin: 0 auto;
       display: flex;
       flex-wrap: wrap;
@@ -171,9 +172,22 @@
       font-weight: 700;
     }
 
+    .btn-google {
+      background-color: #ffffff;
+      color: #1f1f1f;
+      border: 1px solid #747775;
+      font-weight: 600;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+
+    .btn-google:hover {
+      background-color: #f8fafd;
+      border-color: #0b57d0;
+    }
+
     main.main-container {
       width: 100%;
-      max-width: 920px;
+      max-width: 960px;
       margin: 1.75rem auto;
       padding: 0 clamp(1rem, 3vw, 2rem);
       flex: 1;
@@ -196,7 +210,8 @@
     .login-card {
       max-width: 480px;
       width: 100%;
-      margin: 1.5rem auto;
+      margin: 2rem auto;
+      text-align: center;
     }
 
     .panel-header {
@@ -218,6 +233,7 @@
       display: flex;
       flex-direction: column;
       gap: 0.4rem;
+      text-align: left;
     }
 
     .form-field label {
@@ -227,9 +243,7 @@
     }
 
     input[type="text"],
-    input[type="password"],
     input[type="file"],
-    select,
     textarea {
       width: 100%;
       padding: 0.7rem 0.85rem;
@@ -262,31 +276,7 @@
       flex-direction: column;
       justify-content: space-between;
       gap: 0.55rem;
-    }
-
-    .fuero-question-box {
-      background-color: var(--bg-elevated);
-      border: 1px solid var(--border-subtle);
-      border-radius: var(--radius-md);
-      padding: 0.85rem 1rem;
-      display: flex;
-      flex-direction: column;
-      gap: 0.65rem;
-    }
-
-    .radio-group {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 1rem;
-      align-items: center;
-    }
-
-    .radio-label {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.4rem;
-      font-size: 0.9rem;
-      cursor: pointer;
+      text-align: left;
     }
 
     .urgency-banner {
@@ -331,13 +321,47 @@
       color: var(--status-ok);
     }
 
-    .messages-grid {
+    .action-buttons-bar {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 0.85rem;
+      margin-top: 0.5rem;
+    }
+
+    .case-badge {
+      display: inline-block;
+      padding: 0.25rem 0.65rem;
+      border-radius: 999px;
+      font-size: 0.78rem;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .case-badge.verde {
+      background-color: var(--ok-surface);
+      color: var(--status-ok);
+      border: 1px solid var(--status-ok);
+    }
+
+    .case-badge.amarillo {
+      background-color: var(--warn-surface);
+      color: var(--status-warn);
+      border: 1px solid var(--status-warn);
+    }
+
+    .case-badge.rojo {
+      background-color: var(--danger-surface);
+      color: var(--status-danger);
+      border: 1px solid var(--status-danger);
+    }
+
+    .cases-list {
+      display: flex;
+      flex-direction: column;
       gap: 1rem;
     }
 
-    .message-card {
+    .case-item-card {
       background-color: var(--bg-elevated);
       border: 1px solid var(--border-subtle);
       border-radius: var(--radius-md);
@@ -347,9 +371,12 @@
       gap: 0.65rem;
     }
 
-    .message-card h3 {
-      font-size: 0.98rem;
-      font-weight: 700;
+    .case-item-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 0.5rem;
     }
 
     .app-footer {
@@ -369,17 +396,16 @@
   </style>
 </head>
 <body>
-  <!-- ENCABEZADO LIMPIO Y PRÁCTICO -->
   <header class="app-header" role="banner">
     <div class="header-inner">
       <div class="brand-block">
         <h1>Dr. H Argentina</h1>
-        <p>Entendé tu caso en palabras claras, revisá cualquier papel antes de firmar y hablá con tu abogado con respaldo.</p>
+        <p>Tu asistente legal en lenguaje claro y seguimiento asíncrono de causas.</p>
       </div>
-      <div class="header-controls" role="navigation" aria-label="Controles de usuario y apariencia">
+      <div class="header-controls" role="navigation" aria-label="Controles">
         <span id="user-session-badge" class="user-pill hidden"></span>
         <button id="btn-logout" type="button" class="btn btn-secondary hidden">
-          Salir
+          Cerrar Sesión
         </button>
         <button id="btn-theme-toggle" type="button" class="btn btn-secondary" aria-label="Alternar modo claro u oscuro">
           Tema: Claro / Oscuro
@@ -389,45 +415,65 @@
   </header>
 
   <main class="main-container" role="main">
-    <!-- 1. ACCESO PRIVADO EXCLUSIVO DEL ADMINISTRADOR -->
+    <!-- 1. AUTENTICACIÓN GOOGLE OAUTH 2.0 (CERO CONTRASEÑAS) -->
     <section id="login-section" class="panel-card login-card" aria-labelledby="title-login">
-      <div class="panel-header">
+      <div class="panel-header" style="justify-content:center;text-align:center;">
         <div>
-          <h2 id="title-login">Acceso de Administrador</h2>
-          <p style="font-size:0.88rem;color:var(--text-secondary);">
-            Dr. H Argentina está en modo privado. El ingreso está habilitado solo para el administrador.
+          <h2 id="title-login">Ingresá a Dr. H Argentina</h2>
+          <p style="font-size:0.88rem;color:var(--text-secondary);margin-top:0.3rem;">
+            1 sola consulta (expediente inicial) gratis por cuenta de Google. Sin contraseñas.
           </p>
         </div>
       </div>
 
-      <form id="login-form" style="display:flex;flex-direction:column;gap:0.9rem;" novalidate>
-        <div class="form-field">
-          <label for="login-username">Usuario de Administrador:</label>
-          <input id="login-username" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required>
-        </div>
+      <div style="display:flex;flex-direction:column;align-items:center;gap:1rem;margin-top:1rem;">
+        <!-- Botón GIS de Google -->
+        <div id="google-signin-btn-container"></div>
 
-        <div class="form-field">
-          <label for="login-password">Contraseña de Administrador:</label>
-          <input id="login-password" name="password" type="password" autocomplete="current-password" required>
-        </div>
+        <button id="btn-continue-google" type="button" class="btn btn-google btn-large">
+          <svg width="18" height="18" viewBox="0 0 18 18" style="margin-right:6px;">
+            <path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.616z"/>
+            <path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.258c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/>
+            <path fill="#FBBC05" d="M3.964 10.707c-.18-.54-.282-1.117-.282-1.707s.102-1.167.282-1.707V4.961H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.039l3.007-2.332z"/>
+            <path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.961L3.964 7.293C4.672 5.166 6.656 3.58 9 3.58z"/>
+          </svg>
+          Continuar con Google
+        </button>
 
         <div id="login-feedback" class="state-banner hidden" role="alert" aria-live="assertive"></div>
-
-        <button id="btn-login" type="submit" class="btn btn-primary btn-large">
-          Ingresar
-        </button>
-      </form>
+      </div>
     </section>
 
-    <!-- ÁREA DE CONSULTA Y RESPUESTA (HABILITADA TRAS EL INGRESO) -->
+    <!-- ÁREA DE CONSULTA Y SEGUIMIENTO -->
     <div id="app-workspace" class="hidden" style="display:flex;flex-direction:column;gap:1.5rem;">
-      <!-- 2. CAJA ÚNICA DE CONSULTA -->
+      <!-- TARJETA DE PAGO MERCADO PAGO (SI LA CUOTA GRATIS FUE CONSUMIDA) -->
+      <section id="payment-prompt-card" class="panel-card hidden" style="border:2px solid var(--accent-brand);">
+        <div class="panel-header">
+          <div>
+            <h2>Consulta Gratuita Utilizada</h2>
+            <p style="font-size:0.9rem;color:var(--text-secondary);">
+              Ya utilizaste tu consulta gratuita de prueba. Habilitá tu pase para continuar analizando causas.
+            </p>
+          </div>
+        </div>
+        <div style="display:flex;gap:0.75rem;flex-wrap:wrap;align-items:center;">
+          <button id="btn-pay-mercadopago" type="button" class="btn btn-primary btn-large">
+            💳 Abonar Consulta con Mercado Pago ($9.500 ARS)
+          </button>
+          <button id="btn-pay-pase-completo" type="button" class="btn btn-secondary">
+            Pase Completo y Seguimiento Ilimitado ($24.500 ARS)
+          </button>
+        </div>
+        <div id="payment-status-feedback" class="state-banner hidden"></div>
+      </section>
+
+      <!-- 2. CAJA ÚNICA DE CONSULTA (TRIAGE 100% AUTOMÁTICO - CERO FUEROS MANUALES) -->
       <section class="panel-card" aria-labelledby="title-unified-input">
         <div class="panel-header">
           <div>
             <h2 id="title-unified-input">Hacé tu consulta en un solo lugar</h2>
             <p style="font-size:0.88rem;color:var(--text-secondary);">
-              Contanos tu duda con tus palabras, pegá lo que te dijo tu abogado, subí tus archivos o sacale una foto al papel que te piden firmar.
+              Escribí tu duda en criollo, pegá lo que te dijo tu abogado o adjuntá el archivo. Dr. H clasifica automáticamente el área judicial.
             </p>
           </div>
           <button id="btn-demo-pdf" type="button" class="btn btn-secondary">
@@ -435,174 +481,139 @@
           </button>
         </div>
 
-        <div class="form-field">
-          <label for="input-verbal-statement">Escribí tu consulta en criollo o lo que te dijo tu abogado:</label>
-          <textarea
-            id="input-verbal-statement"
-            placeholder="Ej.: 'Me despidieron de palabra y quiero saber qué hacer', o 'Mi abogado me dijo que ya pidió sentencia y que le transfiera $45.000 para gastos, ¿es así?'"></textarea>
-        </div>
-
-        <!-- Carga de archivos (PDF o Audio) + Botón directo de Cámara de Urgencia -->
-        <div class="attachment-bar">
-          <div class="attachment-box">
-            <label for="pdf-file-input" style="font-size:0.88rem;font-weight:700;">
-              Subir archivo (PDF del expediente o audio):
-            </label>
-            <input
-              id="pdf-file-input"
-              type="file"
-              accept="application/pdf,audio/*"
-              aria-describedby="attachment-status-text">
-            <span id="attachment-status-text" style="font-size:0.8rem;color:var(--text-secondary);">
-              Opcional: podés adjuntar el PDF de tu causa o un audio.
-            </span>
+        <form id="consultation-form" autocomplete="off" onsubmit="return false;" style="display:flex;flex-direction:column;gap:1rem;">
+          <div class="form-field">
+            <label for="input-verbal-statement">Escribí tu consulta en criollo o lo que te dijo tu abogado:</label>
+            <textarea
+              id="input-verbal-statement"
+              autocomplete="off"
+              placeholder="Ej.: 'Me despidieron de palabra y quiero saber qué hacer', o 'Mi abogado me pidió plata para gastos, ¿corresponde?'"></textarea>
           </div>
 
-          <div class="attachment-box">
-            <span style="font-size:0.88rem;font-weight:700;">
-              ¿Te están pidiendo firmar algo ahora mismo?
-            </span>
-            <input
-              id="camera-file-input"
-              type="file"
-              accept="image/*,application/pdf"
-              capture="environment"
-              class="hidden">
-            <button id="btn-camera-urgent" type="button" class="btn btn-danger">
-              📷 Escáner de urgencia: No firmes todavía
-            </button>
-            <span id="camera-status-text" style="font-size:0.8rem;color:var(--text-secondary);">
-              Sacá una foto con tu cámara o subí el acuerdo/recibo antes de poner el gancho.
-            </span>
+          <!-- Archivo PDF / Audio o Cámara de Urgencia -->
+          <div class="attachment-bar">
+            <div class="attachment-box">
+              <label for="pdf-file-input" style="font-size:0.88rem;font-weight:700;">
+                Subir expediente (PDF o audio):
+              </label>
+              <input
+                id="pdf-file-input"
+                type="file"
+                autocomplete="off"
+                accept="application/pdf,audio/*"
+                aria-describedby="attachment-status-text">
+              <span id="attachment-status-text" style="font-size:0.8rem;color:var(--text-secondary);">
+                Podés adjuntar el PDF de tu causa para análisis exhaustivo.
+              </span>
+            </div>
+
+            <div class="attachment-box">
+              <span style="font-size:0.88rem;font-weight:700;">
+                ¿Te están pidiendo firmar algo ahora mismo?
+              </span>
+              <input
+                id="camera-file-input"
+                type="file"
+                autocomplete="off"
+                accept="image/*,application/pdf"
+                capture="environment"
+                class="hidden">
+              <button id="btn-camera-urgent" type="button" class="btn btn-danger">
+                📷 Escáner de urgencia: No firmes todavía
+              </button>
+              <span id="camera-status-text" style="font-size:0.8rem;color:var(--text-secondary);">
+                Sacale una foto al papel antes de poner el gancho.
+              </span>
+            </div>
           </div>
-        </div>
 
-        <!-- Pregunta opcional simple de Fuero -->
-        <div class="fuero-question-box">
-          <span style="font-size:0.88rem;font-weight:700;">
-            ¿Sabés a qué fuero corresponde tu consulta? (Opcional)
-          </span>
-          <div class="radio-group" role="radiogroup" aria-label="Detección de fuero">
-            <label class="radio-label">
-              <input type="radio" name="know-fuero" id="radio-fuero-auto" value="AUTO" checked>
-              No — Que Dr. H lo detecte automáticamente
-            </label>
-            <label class="radio-label">
-              <input type="radio" name="know-fuero" id="radio-fuero-manual" value="MANUAL">
-              Sí, quiero elegirlo
-            </label>
-          </div>
+          <div id="consultation-state-banner" class="state-banner hidden" role="status" aria-live="polite"></div>
 
-          <div id="manual-fuero-wrap" class="form-field hidden">
-            <label for="select-fuero-manual">Elegí el tema de tu caso:</label>
-            <select id="select-fuero-manual">
-              <option value="AUTO">Detectar automáticamente</option>
-              <option value="01_penal">Penal (Comisaría, denuncias, detenciones)</option>
-              <option value="02_familia">Familia (Cuota alimentaria, régimen de visitas, violencia familiar)</option>
-              <option value="03_laboral">Laboral y Accidentes de Trabajo (Despidos, ART, trabajo en negro)</option>
-              <option value="04_civil">Civil y Alquileres (Contratos, choques, daños, sucesiones)</option>
-              <option value="05_comercial_consumidor">Deudas y Defensa del Consumidor (Tarjetas, bancos, embargos)</option>
-              <option value="06_seguridad_social_salud">Jubilaciones, ANSES y Reclamos de Salud / Obras Sociales</option>
-              <option value="07_contencioso_tributario">Multas de Tránsito, Impuestos y Reclamos al Estado</option>
-            </select>
-          </div>
-        </div>
-
-        <div id="consultation-state-banner" class="state-banner hidden" role="status" aria-live="polite"></div>
-
-        <!-- Único botón principal de consulta -->
-        <button id="btn-run-full-analysis" type="button" class="btn btn-primary btn-large">
-          Consultar a Dr. H
-        </button>
+          <button id="btn-run-full-analysis" type="button" class="btn btn-primary btn-large">
+            Consultar a Dr. H
+          </button>
+        </form>
       </section>
 
-      <!-- 3. SECCIÓN DE RESPUESTA PRÁCTICA (CON WHATSAPP, EMAIL Y PDF) -->
-      <section class="panel-card" id="report-output-section" aria-labelledby="title-report">
+      <!-- 3. RESULTADOS Y BOTONES DE ACCIÓN INMEDIATA -->
+      <section class="panel-card hidden" id="report-output-section" aria-labelledby="title-report">
         <div class="panel-header">
           <div>
-            <h2 id="title-report">Respuesta y Recomendaciones para tu Caso</h2>
-            <p id="report-meta-subtitle" style="font-size:0.88rem;color:var(--text-secondary);">
-              Completá tu consulta arriba y presioná "Consultar a Dr. H" para recibir tu explicación clara.
-            </p>
+            <h2 id="title-report">Dictamen y Recomendaciones Prácticas</h2>
+            <p id="report-meta-subtitle" style="font-size:0.88rem;color:var(--text-secondary);"></p>
           </div>
-          <span id="result-detected-fuero" class="user-pill hidden"></span>
+          <span id="result-detected-fuero" class="user-pill"></span>
         </div>
 
-        <div id="report-empty-state" class="state-banner">
-          Todavía no realizaste ninguna consulta en esta sesión.
-        </div>
-
-        <div id="report-content-wrap" class="hidden" style="display:flex;flex-direction:column;gap:1.15rem;">
-          <!-- Semáforo de Urgencia: "No firmes nada todavía" o "Podés avanzar" -->
+        <div id="report-content-wrap" style="display:flex;flex-direction:column;gap:1.15rem;">
+          <!-- Semáforo de Urgencia -->
           <div id="do-not-sign-banner" class="urgency-banner safe" role="alert">
             <span id="do-not-sign-title">Podés avanzar</span>
             <span id="do-not-sign-text" style="font-weight:500;font-size:0.93rem;"></span>
           </div>
 
-          <!-- Explicación del caso en criollo -->
-          <article class="message-card">
+          <!-- Explicación en criollo -->
+          <article class="panel-card" style="box-shadow:none;border-color:var(--border-subtle);">
             <h3>Explicación de tu caso en criollo</h3>
             <p id="report-plain-summary" style="font-size:0.95rem;"></p>
-            <p id="report-audit-section" style="font-size:0.9rem;color:var(--text-secondary);"></p>
+            <p id="report-audit-section" style="font-size:0.9rem;color:var(--text-secondary);margin-top:0.5rem;"></p>
 
-            <div id="report-questions-wrap" class="hidden" style="margin-top:0.35rem;">
-              <h4 style="font-size:0.9rem;margin-bottom:0.35rem;">Puntos clave y preguntas recomendadas:</h4>
+            <div id="report-questions-wrap" class="hidden" style="margin-top:0.5rem;">
+              <h4 style="font-size:0.9rem;margin-bottom:0.35rem;">Preguntas técnicas sugeridas para tu abogado:</h4>
               <ul id="report-questions-list" style="padding-left:1.25rem;font-size:0.9rem;display:flex;flex-direction:column;gap:0.3rem;"></ul>
-            </div>
-
-            <div style="display:flex;gap:0.6rem;align-items:center;flex-wrap:wrap;margin-top:0.35rem;">
-              <button id="btn-play-audio" type="button" class="btn btn-secondary">🔊 Escuchar explicación</button>
-              <button id="btn-stop-audio" type="button" class="btn btn-secondary">Detener voz</button>
-              <span id="audio-status-label" style="font-size:0.82rem;color:var(--text-secondary);"></span>
-              <span id="report-audio-script" class="hidden"></span>
             </div>
           </article>
 
-          <!-- Dos bloques listos para usar: WhatsApp y Email -->
-          <div class="messages-grid">
-            <!-- Bloque 1: Mensaje breve para WhatsApp -->
-            <article class="message-card">
-              <h3>Mensaje breve para enviar por WhatsApp a tu abogado</h3>
-              <textarea id="report-whatsapp-text" readonly style="min-height:125px;"></textarea>
-              <div style="display:flex;gap:0.6rem;flex-wrap:wrap;">
-                <button id="btn-copy-whatsapp" type="button" class="btn btn-primary">
-                  Copiar texto
-                </button>
-                <button id="btn-open-whatsapp" type="button" class="btn btn-success">
-                  Abrir WhatsApp
-                </button>
-              </div>
-            </article>
-
-            <!-- Bloque 2: Nota formal para enviar por Email -->
-            <article class="message-card">
-              <h3>Nota formal para enviar por Email (con puntos a reclamar)</h3>
-              <textarea id="report-email-text" readonly style="min-height:125px;"></textarea>
-              <div style="display:flex;gap:0.6rem;flex-wrap:wrap;">
-                <button id="btn-copy-email" type="button" class="btn btn-primary">
-                  Copiar texto
-                </button>
-                <button id="btn-open-email" type="button" class="btn btn-secondary">
-                  Abrir en Email
-                </button>
-              </div>
-            </article>
-          </div>
-
-          <!-- Botón final: Descargar Informe en PDF -->
-          <div style="display:flex;justify-content:flex-end;padding-top:0.4rem;">
-            <button id="btn-download-pdf" type="button" class="btn btn-success btn-large" disabled>
-              Descargar Informe en PDF
+          <!-- TRES BOTONES DE ACCIÓN INMEDIATA -->
+          <div class="action-buttons-bar">
+            <button id="btn-download-pdf" type="button" class="btn btn-success">
+              📄 Descargar Informe Completo (PDF)
+            </button>
+            <button id="btn-open-whatsapp" type="button" class="btn btn-primary">
+              💬 Enviar por WhatsApp al Abogado
+            </button>
+            <button id="btn-copy-email" type="button" class="btn btn-secondary">
+              ✉️ Copiar borrador para Email
             </button>
           </div>
+
+          <!-- Vistas previas editables / copiables -->
+          <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(280px, 1fr));gap:1rem;">
+            <div class="panel-card" style="box-shadow:none;">
+              <h4 style="font-size:0.88rem;">Texto para WhatsApp:</h4>
+              <textarea id="report-whatsapp-text" autocomplete="off" readonly style="min-height:90px;font-size:0.85rem;"></textarea>
+            </div>
+            <div class="panel-card" style="box-shadow:none;">
+              <h4 style="font-size:0.88rem;">Borrador para Email:</h4>
+              <textarea id="report-email-text" autocomplete="off" readonly style="min-height:90px;font-size:0.85rem;"></textarea>
+            </div>
+          </div>
         </div>
+      </section>
+
+      <!-- 4. DASHBOARD DE USUARIO: HISTORIAL DE CAUSAS Y AGREGAR MOVIMIENTO -->
+      <section class="panel-card" id="cases-dashboard-section" aria-labelledby="title-cases">
+        <div class="panel-header">
+          <div>
+            <h2 id="title-cases">Mis Causas y Seguimiento Asíncrono</h2>
+            <p style="font-size:0.88rem;color:var(--text-secondary);">
+              Revisá tus expedientes guardados y sumá novedades procesales (1 o 2 fojas) para actualizar el semáforo.
+            </p>
+          </div>
+          <button id="btn-refresh-cases" type="button" class="btn btn-secondary">
+            Actualizar Historial
+          </button>
+        </div>
+
+        <div id="cases-loading-banner" class="state-banner hidden">Cargando tus causas...</div>
+        <div id="cases-empty-banner" class="state-banner">Aún no registraste causas en tu cuenta. Se guardarán automáticamente al consultar un expediente.</div>
+        <div id="cases-list-container" class="cases-list"></div>
       </section>
     </div>
   </main>
 
-  <!-- 4. PIE DE PÁGINA LIMPIO -->
   <footer class="app-footer" role="contentinfo">
-    Legislación actualizada automáticamente todos los días a las 07:00 AM
+    Legislación actualizada automáticamente todos los días a las 07:00 AM • Modo Cero Huella
   </footer>
 
   <script src="/app.js" defer></script>

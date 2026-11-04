@@ -42,15 +42,16 @@ class TestPaso5FrontendPwaAndRateLimiter(unittest.TestCase):
         self.assertIn("Dr. H Argentina", resp_index.text)
         self.assertIn('meta name="color-scheme" content="light dark"', resp_index.text)
         self.assertIn('id="login-section"', resp_index.text)
-        self.assertIn('id="login-username"', resp_index.text)
-        self.assertIn('id="login-password"', resp_index.text)
+        self.assertIn('id="btn-continue-google"', resp_index.text)
+        self.assertIn("Continuar con Google", resp_index.text)
         self.assertIn('id="btn-camera-urgent"', resp_index.text)
         self.assertIn("Escáner de urgencia: No firmes todavía", resp_index.text)
-        self.assertIn("No — Que Dr. H lo detecte automáticamente", resp_index.text)
         self.assertIn('id="btn-run-full-analysis"', resp_index.text)
-        self.assertIn('id="btn-copy-whatsapp"', resp_index.text)
+        self.assertIn('id="btn-open-whatsapp"', resp_index.text)
         self.assertIn('id="btn-copy-email"', resp_index.text)
         self.assertIn('id="btn-download-pdf"', resp_index.text)
+        self.assertIn('id="cases-dashboard-section"', resp_index.text)
+        self.assertIn('id="payment-prompt-card"', resp_index.text)
         self.assertIn(
             "Legislación actualizada automáticamente todos los días a las 07:00 AM",
             resp_index.text,

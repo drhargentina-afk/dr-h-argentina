@@ -34,7 +34,20 @@ from core.admin_auth import (
     AdminSessionResponse,
     AdminSessionStatus,
 )
+from core.auth_oauth import (
+    GoogleAuthRequest,
+    GoogleAuthResponse,
+    GoogleOAuthManager,
+    UserProfileResponse,
+)
+from core.case_tracker import CaseTrackerService
 from core.config import ApiKeyLeakGuardMiddleware, ServerSecurityConfig
+from core.database import DrHDatabase
+from core.mercadopago_gateway import (
+    CreatePreferenceRequest,
+    CreatePreferenceResponse,
+    MercadoPagoGateway,
+)
 from core.privacy_anonymizer import PrivacyAnonymizer, SessionAnonymizerMap
 from core.rate_limiter_queue import (
     QueueStatusSnapshot,
@@ -56,7 +69,11 @@ __all__ = [
     "AuditReviewResult",
     "BoletinOficialNormInput",
     "CaseContext",
+    "CaseTrackerService",
     "ContradictionFinding",
+    "CreatePreferenceRequest",
+    "CreatePreferenceResponse",
+    "DrHDatabase",
     "EmergencyScanRequest",
     "EmergencyScanResponse",
     "FinalCitizenReport",
@@ -66,6 +83,10 @@ __all__ = [
     "FueroKey",
     "GamuzaMarketImpact",
     "GamuzaRegulatorySignal",
+    "GoogleAuthRequest",
+    "GoogleAuthResponse",
+    "GoogleOAuthManager",
+    "MercadoPagoGateway",
     "PreQuoteResponse",
     "PreliminaryMoneyCalculation",
     "PrivacyAnonymizer",

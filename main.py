@@ -1,30 +1,21 @@
-"""Entrypoint FastAPI de Dr. H Argentina (Nodo Capa-País 'AR') — MODO PRIVADO EXCLUSIVO ADMINISTRADOR.
+"""Entrypoint FastAPI de Dr. H Argentina (Nodo Capa-País 'AR').
 
-Control de acceso:
-- `/docs`, `/redoc` y `/openapi.json` deshabilitados para el público; solo responden con credenciales
-  de Administrador (HTTP Basic con `ADMIN_USER` / `ADMIN_PASSWORD`).
-- `POST /auth/login`  -> valida `ADMIN_USER` / `ADMIN_PASSWORD` y emite un token Bearer de Administrador.
-- `GET  /auth/me`     -> verifica el token vigente.
-- `POST /auth/logout` -> revoca el token.
-- Todos los motores exigen `Authorization: Bearer <token de Administrador>`:
-  /pre-quote, /analyze-expediente, /emergency-scan, /repository-consult, /download-report-pdf,
-  /demo-sample-pdf, /cron-07am y /queue-status.
-- `/health` permanece abierto (sin datos de usuarios) para los chequeos de disponibilidad del hosting.
-
-Motores conectados con `Agente000Orchestrator` (sin cambios funcionales):
-1. POST /pre-quote          -> Cotizador e higiene instantánea PyMuPDF en RAM.
-2. POST /analyze-expediente -> Ciclo completo Ida y Vuelta de Agente000.
-3. POST /emergency-scan     -> Escáner "¡No Firmes Todavía!".
-4. POST /repository-consult -> Consultor del repositorio normativo argentino.
-5. POST /cron-07am          -> Ingesta matutina del Boletín Oficial y señales a Proyecto Gamuza.
+Arquitectura Refactorizada MVP:
+1. Autenticación con Google OAuth 2.0 (Google Identity Services) + control anti-abuso.
+2. Regla de gratuidad: 1 consulta gratis por cuenta de Google.
+3. Filtro Criptográfico (Firma SHA-256): Bloqueo HTTP 403 si el documento ya fue procesado bajo una prueba gratuita.
+4. Dashboard de Causas y Seguimiento Asíncrono de Movimientos (1-2 fojas) con semáforo procesal.
+5. Integración con Mercado Pago SDK para cobro de consultas y pases en ARS sin costos fijos.
+6. Cero contraseñas judiciales: el ciudadano mantiene control total de sus documentos.
 """
 from __future__ import annotations
 
 import base64
 import binascii
 from decimal import Decimal, InvalidOperation
+import hashlib
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import fitz  # PyMuPDF
 from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile, status
@@ -45,7 +36,20 @@ from core.admin_auth import (
     AdminSessionStatus,
 )
 from core.agente000_orchestrator import Agente000Orchestrator
+from core.auth_oauth import (
+    GoogleAuthRequest,
+    GoogleAuthResponse,
+    GoogleOAuthManager,
+    UserProfileResponse,
+)
+from core.case_tracker import CaseTrackerService
 from core.config import ApiKeyLeakGuardMiddleware
+from core.database import DrHDatabase
+from core.mercadopago_gateway import (
+    CreatePreferenceRequest,
+    CreatePreferenceResponse,
+    MercadoPagoGateway,
+)
 from core.models import (
     BoletinOficialNormInput,
     EmergencyScanRequest,
@@ -61,11 +65,10 @@ from core.models import (
 from core.rate_limiter_queue import QueueStatusSnapshot
 from ingestion_07am.system_watchdog import SystemHealthReport
 
-# docs_url / redoc_url / openapi_url en None: FastAPI no publica la documentación automáticamente.
 app = FastAPI(
-    title="Dr. H Argentina — Panel Privado de Administración",
-    description="Plataforma de análisis jurídico argentino en modo privado exclusivo para el Administrador.",
-    version="1.4.0-AR-PWA",
+    title="Dr. H Argentina — Sistema de Inteligencia y Auditoría Jurídica",
+    description="Plataforma de análisis de causas judiciales argentinas con Google OAuth, filtro criptográfico y seguimiento asíncrono.",
+    version="1.5.0-AR-MVP",
     docs_url=None,
     redoc_url=None,
     openapi_url=None,
@@ -74,55 +77,85 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["GET", "POST"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"],
 )
 
 orchestrator = Agente000Orchestrator()
+db = DrHDatabase(orchestrator.security_config.database_url or None)
+google_auth = GoogleOAuthManager(orchestrator.security_config, db)
+mp_gateway = MercadoPagoGateway(
+    access_token=orchestrator.security_config.mercadopago_access_token.get_secret_value(),
+    public_key=orchestrator.security_config.mercadopago_public_key,
+    db=db,
+)
+case_tracker = CaseTrackerService(db, orchestrator)
+
 admin_sessions = AdminSessionManager(
     admin_user=orchestrator.security_config.admin_user,
     admin_password=orchestrator.security_config.admin_password,
     ttl_hours=orchestrator.security_config.admin_session_ttl_hours,
 )
+
 app.add_middleware(ApiKeyLeakGuardMiddleware, config=orchestrator.security_config)
 
 FRONTEND_PWA_DIR = Path(__file__).resolve().parent / "frontend_pwa"
 
-_bearer_scheme = HTTPBearer(auto_error=False, description="Token de sesión del Administrador (POST /auth/login).")
+_bearer_scheme = HTTPBearer(auto_error=False, description="Token Bearer de sesión Google o Administrador.")
 
 
 def _client_origin(request: Request) -> str:
-    """Origen del cliente para el control de fuerza bruta.
-
-    Se usa la IP de la conexión (no `X-Forwarded-For`, que el cliente puede falsificar). Detrás de un
-    proxy, ejecutar uvicorn con `--proxy-headers --forwarded-allow-ips=<IP del proxy>`.
-    """
+    """Extrae la IP o identificación del cliente."""
     if request.client and request.client.host:
         return request.client.host
     return "unknown"
 
 
-def require_admin_token(
+def get_current_user(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer_scheme)],
-) -> AdminSessionStatus:
-    """Dependencia de candado: solo deja pasar peticiones con token Bearer válido del Administrador."""
+) -> UserProfileResponse:
+    """Valida el token Bearer (Google OAuth o Administrador) y devuelve el perfil del usuario."""
     token = credentials.credentials if credentials is not None else None
-    try:
-        return admin_sessions.validate_token(token)
-    except AdminAuthError as exc:
+    if not token or not token.strip():
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=str(exc),
+            detail="Sesión no iniciada. Por favor iniciá sesión con Google.",
             headers={"WWW-Authenticate": "Bearer"},
-        ) from exc
+        )
 
+    clean_tok = token.strip()
 
-AdminGuard = Annotated[AdminSessionStatus, Depends(require_admin_token)]
+    # 1. Intentar validar como sesión Google OAuth
+    try:
+        return google_auth.validate_session(clean_tok)
+    except PermissionError:
+        pass
+
+    # 2. Intentar validar como sesión de Administrador (para compatibilidad de panel y tests)
+    try:
+        admin_status = admin_sessions.validate_token(clean_tok)
+        return UserProfileResponse(
+            email=admin_status.username,
+            name="Administrador Maestro",
+            picture="",
+            free_consultations_used=0,
+            has_paid_pass=True,
+            can_consult_free=True,
+            is_admin=True,
+        )
+    except AdminAuthError:
+        pass
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Tu sesión es inválida o expiró. Por favor volvé a ingresar con Google.",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
 
 def _require_admin_basic_auth(request: Request) -> None:
-    """Exige credenciales HTTP Basic del Administrador para el panel técnico (/docs, /redoc, /openapi.json)."""
+    """Protege /docs, /redoc y /openapi.json exigiendo credenciales del Administrador."""
     challenge = {"WWW-Authenticate": 'Basic realm="Dr. H - Panel Tecnico Privado", charset="UTF-8"'}
     auth_header = request.headers.get("Authorization", "").strip()
     if not auth_header.lower().startswith("basic "):
@@ -183,37 +216,39 @@ def _parse_optional_decimal(raw_val: str | None, field_name: str) -> Decimal | N
 
 
 # =========================================================================
-# PANEL TÉCNICO PRIVADO (/docs, /redoc, /openapi.json) — SOLO ADMINISTRADOR
+# AUTENTICACIÓN GOOGLE OAUTH 2.0 (CERO CONTRASEÑAS) Y ADMIN PANEL
 # =========================================================================
 
-@app.get("/openapi.json", include_in_schema=False)
-async def private_openapi(request: Request) -> JSONResponse:
-    """Esquema OpenAPI disponible únicamente con credenciales del Administrador."""
-    _require_admin_basic_auth(request)
-    return JSONResponse(get_openapi(title=app.title, version=app.version, routes=app.routes))
+@app.post("/auth/google", response_model=GoogleAuthResponse, tags=["Autenticación Google"])
+async def auth_google_endpoint(req: GoogleAuthRequest) -> GoogleAuthResponse:
+    """Inicia sesión con Google Identity Services (GIS). Una sola consulta gratis por cuenta."""
+    try:
+        return google_auth.login_with_google(req.credential)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
-@app.get("/docs", include_in_schema=False)
-async def private_swagger_docs(request: Request) -> HTMLResponse:
-    """Swagger UI disponible únicamente con credenciales del Administrador."""
-    _require_admin_basic_auth(request)
-    return get_swagger_ui_html(openapi_url="/openapi.json", title=f"{app.title} - Docs")
+@app.get("/auth/me", response_model=UserProfileResponse, tags=["Autenticación Google"])
+async def auth_me_endpoint(user: Annotated[UserProfileResponse, Depends(get_current_user)]) -> UserProfileResponse:
+    """Devuelve el perfil del usuario autenticado y su estado de cuota."""
+    return user
 
 
-@app.get("/redoc", include_in_schema=False)
-async def private_redoc(request: Request) -> HTMLResponse:
-    """ReDoc disponible únicamente con credenciales del Administrador."""
-    _require_admin_basic_auth(request)
-    return get_redoc_html(openapi_url="/openapi.json", title=f"{app.title} - ReDoc")
+@app.post("/auth/logout", status_code=status.HTTP_204_NO_CONTENT, tags=["Autenticación Google"])
+async def auth_logout_endpoint(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer_scheme)],
+) -> Response:
+    """Revoca el token de sesión activo (Google o Admin)."""
+    token = credentials.credentials if credentials is not None else None
+    if token:
+        google_auth.logout(token)
+        admin_sessions.revoke_token(token)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
-
-# =========================================================================
-# AUTENTICACIÓN DEL ADMINISTRADOR
-# =========================================================================
 
 @app.post("/auth/login", response_model=AdminSessionResponse, tags=["Acceso Administrador"])
-async def auth_login_endpoint(credentials: AdminLoginRequest, request: Request) -> AdminSessionResponse:
-    """Valida ADMIN_USER / ADMIN_PASSWORD y emite un token Bearer de Administrador."""
+async def auth_admin_login_endpoint(credentials: AdminLoginRequest, request: Request) -> AdminSessionResponse:
+    """Permite el acceso administrativo de soporte técnico (ADMIN_USER/ADMIN_PASSWORD)."""
     try:
         return admin_sessions.login(credentials, origin=_client_origin(request))
     except AdminLockoutError as exc:
@@ -226,49 +261,210 @@ async def auth_login_endpoint(credentials: AdminLoginRequest, request: Request) 
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
 
 
-@app.get("/auth/me", response_model=AdminSessionStatus, tags=["Acceso Administrador"])
-async def auth_me_endpoint(session: AdminGuard) -> AdminSessionStatus:
-    """Confirma que el token Bearer del Administrador sigue vigente."""
-    return session
+# =========================================================================
+# PANEL TÉCNICO PRIVADO (/docs, /redoc, /openapi.json)
+# =========================================================================
+
+@app.get("/openapi.json", include_in_schema=False)
+async def private_openapi(request: Request) -> JSONResponse:
+    _require_admin_basic_auth(request)
+    return JSONResponse(
+        get_openapi(
+            title="Dr. H Argentina — Panel Privado de Administración",
+            version=app.version,
+            routes=app.routes,
+        )
+    )
 
 
-@app.post("/auth/logout", status_code=status.HTTP_204_NO_CONTENT, tags=["Acceso Administrador"])
-async def auth_logout_endpoint(
-    _session: AdminGuard,
-    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer_scheme)],
-) -> Response:
-    """Revoca el token Bearer del Administrador."""
-    admin_sessions.revoke_token(credentials.credentials if credentials is not None else None)
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+@app.get("/docs", include_in_schema=False)
+async def private_swagger_docs(request: Request) -> HTMLResponse:
+    _require_admin_basic_auth(request)
+    return get_swagger_ui_html(openapi_url="/openapi.json", title=f"{app.title} - Docs")
+
+
+@app.get("/redoc", include_in_schema=False)
+async def private_redoc(request: Request) -> HTMLResponse:
+    _require_admin_basic_auth(request)
+    return get_redoc_html(openapi_url="/openapi.json", title=f"{app.title} - ReDoc")
 
 
 # =========================================================================
-# SISTEMA
+# MOTORES DE CONSULTA CON CONTROL ANTI-ABUSO Y FILTRO CRIPTOGRÁFICO
 # =========================================================================
 
-@app.get("/health", response_model=SystemHealthReport, tags=["Sistema"])
-async def health_check() -> SystemHealthReport:
-    """Healthcheck de disponibilidad (abierto para el hosting; no expone datos de consultas)."""
-    return orchestrator.system_watchdog.build_health_report(orchestrator)
+@app.post(
+    "/analyze-expediente",
+    response_model=FinalCitizenReport,
+    status_code=status.HTTP_200_OK,
+    tags=["Flujo Completo Agente000"],
+)
+async def analyze_expediente_endpoint(
+    file: Annotated[UploadFile, File(description="Archivo PDF del expediente judicial.")],
+    user: Annotated[UserProfileResponse, Depends(get_current_user)],
+    user_verbal_statement: Annotated[
+        str,
+        Form(description="Relato del ciudadano o duda principal."),
+    ] = "",
+    province_jurisdiction: Annotated[
+        ProvinceKey | None,
+        Form(description="Jurisdicción procesal opcional (detectada automáticamente si se omite)."),
+    ] = None,
+    user_role: Annotated[
+        UserRole | None,
+        Form(description="Rol del ciudadano en el caso."),
+    ] = None,
+    claimed_lawyer_fee_pct: Annotated[
+        str | None,
+        Form(description="Porcentaje de honorarios pactado o pretendido."),
+    ] = None,
+    upfront_cost_requested_ars: Annotated[
+        str | None,
+        Form(description="Adelanto de gastos o tasa solicitado."),
+    ] = None,
+) -> FinalCitizenReport:
+    """Ciclo completo de análisis: validación de cuota, firma SHA-256 anti-abuso y registro en causas."""
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El archivo subido está vacío.")
+
+    # 1. Filtro Criptográfico (Firma de Documento SHA-256)
+    sha256 = hashlib.sha256(file_bytes).hexdigest()
+    if db.is_document_already_processed_free(sha256):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Este documento ya fue procesado bajo una prueba gratuita",
+        )
+
+    # 2. Regla de Gratuidad: 1 sola consulta gratis por cuenta de Google
+    is_free_user = not user.is_admin and not user.has_paid_pass
+    if is_free_user and user.free_consultations_used >= 1:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail="Ya utilizaste tu consulta gratuita de prueba. Habilitá tu pase para continuar.",
+        )
+
+    fee_dec = _parse_optional_decimal(claimed_lawyer_fee_pct, "claimed_lawyer_fee_pct")
+    upfront_dec = _parse_optional_decimal(upfront_cost_requested_ars, "upfront_cost_requested_ars")
+
+    try:
+        report = orchestrator.analyze_full_expediente(
+            file_bytes=file_bytes,
+            file_name=file.filename or "expediente.pdf",
+            user_verbal_statement=user_verbal_statement,
+            explicit_province=province_jurisdiction,
+            explicit_role=user_role,
+            claimed_lawyer_fee_pct=fee_dec,
+            upfront_cost_requested_ars=upfront_dec,
+        )
+
+        # 3. Registrar huella del documento para impedir multicuentas sobre el mismo PDF
+        db.record_document_fingerprint(
+            sha256_hash=sha256,
+            user_email=user.email,
+            is_free_tier=is_free_user,
+        )
+
+        # 4. Consumir consulta gratuita si correspondía
+        if is_free_user:
+            db.increment_free_consultations(user.email)
+
+        # 5. Guardar automáticamente en el Dashboard de causas del usuario
+        case_tracker.record_case_from_final_report(
+            user_email=user.email,
+            report=report,
+        )
+
+        return report
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error durante el análisis del expediente: {exc}",
+        ) from exc
 
 
-@app.get("/queue-status", response_model=QueueStatusSnapshot, tags=["Sistema"])
-async def queue_status_endpoint(_session: AdminGuard) -> QueueStatusSnapshot:
-    """Estado de la cola de Google AI Studio y contador de enfriamientos HTTP 429 (solo Administrador)."""
-    return orchestrator.rate_limiter.get_status_snapshot()
+@app.post(
+    "/pre-quote",
+    response_model=PreQuoteResponse,
+    status_code=status.HTTP_200_OK,
+    tags=["Higiene Zero-Storage"],
+)
+async def pre_quote_endpoint(
+    file: Annotated[UploadFile, File(description="Archivo PDF del expediente.")],
+    _user: Annotated[UserProfileResponse, Depends(get_current_user)],
+) -> PreQuoteResponse:
+    """Pre-cotiza y aplica higiene en memoria RAM sin consumir IA."""
+    try:
+        file_bytes = await file.read()
+        return orchestrator.pre_quote_document(
+            file_bytes=file_bytes,
+            file_name=file.filename or "expediente.pdf",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error procesando la pre-cotización: {exc}",
+        ) from exc
 
 
-# =========================================================================
-# MOTORES DE CONSULTA (CANDADO: TOKEN DE ADMINISTRADOR OBLIGATORIO)
-# =========================================================================
+@app.post(
+    "/emergency-scan",
+    response_model=EmergencyScanResponse,
+    status_code=status.HTTP_200_OK,
+    tags=["Modo Urgencia"],
+)
+async def emergency_scan_endpoint(
+    request: EmergencyScanRequest,
+    _user: Annotated[UserProfileResponse, Depends(get_current_user)],
+) -> EmergencyScanResponse:
+    """Escáner '¡No Firmes Todavía!' para cláusulas de renuncia o resoluciones urgentes."""
+    try:
+        return orchestrator.run_emergency_scan(request)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error en el escáner de urgencia: {exc}",
+        ) from exc
+
+
+@app.post(
+    "/repository-consult",
+    response_model=RepositoryConsultResponse,
+    status_code=status.HTTP_200_OK,
+    tags=["Consultor Normativo"],
+)
+async def repository_consult_endpoint(
+    request: RepositoryConsultRequest,
+    _user: Annotated[UserProfileResponse, Depends(get_current_user)],
+) -> RepositoryConsultResponse:
+    """Consulta normativa y contraste de jurisprudencia."""
+    try:
+        return orchestrator.consult_normative_repository(request)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error consultando el repositorio: {exc}",
+        ) from exc
+
 
 @app.post(
     "/download-report-pdf",
     status_code=status.HTTP_200_OK,
-    tags=["2. Flujo Completo Agente000 (Ida y Vuelta)"],
+    tags=["Entregables"],
 )
-async def download_report_pdf_endpoint(report: FinalCitizenReport, _session: AdminGuard) -> Response:
-    """Genera y descarga en memoria RAM el PDF institucional auditado sin escribir en el disco del servidor."""
+async def download_report_pdf_endpoint(
+    report: FinalCitizenReport,
+    _user: Annotated[UserProfileResponse, Depends(get_current_user)],
+) -> Response:
+    """Genera y descarga en memoria RAM el dictamen en formato PDF institucional."""
     try:
         pdf_bytes = CitizenReportBuilder.build_pdf_in_ram(report)
         return Response(
@@ -282,13 +478,13 @@ async def download_report_pdf_endpoint(report: FinalCitizenReport, _session: Adm
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error construyendo el PDF en memoria RAM: {exc}",
+            detail=f"Error construyendo el PDF: {exc}",
         ) from exc
 
 
-@app.get("/demo-sample-pdf", tags=["1. Pre-Cotizador e Higiene Zero-Storage"])
-async def demo_sample_pdf_endpoint(_session: AdminGuard) -> Response:
-    """Genera en RAM un expediente sintético multipágina (SCBA Laboral) para pruebas del Administrador."""
+@app.get("/demo-sample-pdf", tags=["Demostración"])
+async def demo_sample_pdf_endpoint(_user: Annotated[UserProfileResponse, Depends(get_current_user)]) -> Response:
+    """Genera en RAM un expediente sintético multipágina para pruebas."""
     doc = fitz.open()
     try:
         p1 = doc.new_page()
@@ -300,7 +496,7 @@ async def demo_sample_pdf_endpoint(_session: AdminGuard) -> Response:
             "El Sr. Juan Carlos Perez, DNI 30.123.456, CUIL 20-30123456-3, con domicilio real en Calle San Martin 1240, Quilmes,\n"
             "reclama indemnizacion laboral por la suma de $ 4.500.000,00 depositables en CBU 0110599520000012345678.",
         )
-        doc.new_page()  # Foja 2 en blanco (descartada por higiene)
+        doc.new_page()
         p3 = doc.new_page()
         p3.insert_text((50, 70), "Firmado digitalmente por SECRETARIO JUDICIAL SCBA MEV - Página 3 de 4")
         p4 = doc.new_page()
@@ -322,182 +518,156 @@ async def demo_sample_pdf_endpoint(_session: AdminGuard) -> Response:
     )
 
 
-@app.post(
-    "/pre-quote",
-    response_model=PreQuoteResponse,
-    status_code=status.HTTP_200_OK,
-    tags=["1. Pre-Cotizador e Higiene Zero-Storage"],
-)
-async def pre_quote_endpoint(
-    file: Annotated[UploadFile, File(description="Archivo PDF del expediente.")],
-    _session: AdminGuard,
-) -> PreQuoteResponse:
-    """Cuenta páginas, filtra hojas basura/repetidas con PyMuPDF en RAM y cotiza el abono sin gastar tokens de IA."""
+# =========================================================================
+# DASHBOARD DE CAUSAS Y SEGUIMIENTO ASÍNCRONO ("AGREGAR MOVIMIENTO")
+# =========================================================================
+
+@app.get("/cases", tags=["Seguimiento de Causas"])
+async def list_cases_endpoint(
+    user: Annotated[UserProfileResponse, Depends(get_current_user)],
+) -> list[dict[str, Any]]:
+    """Devuelve la lista de causas del usuario autenticado."""
+    return case_tracker.list_user_cases(user.email)
+
+
+@app.get("/cases/{case_id}", tags=["Seguimiento de Causas"])
+async def get_case_detail_endpoint(
+    case_id: str,
+    user: Annotated[UserProfileResponse, Depends(get_current_user)],
+) -> dict[str, Any]:
+    """Obtiene los detalles y el historial de movimientos de una causa."""
     try:
-        file_bytes = await file.read()
-        return orchestrator.pre_quote_document(
+        return case_tracker.get_case_detail(case_id, user.email)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@app.post("/cases/{case_id}/movement", tags=["Seguimiento de Causas"])
+async def add_movement_endpoint(
+    case_id: str,
+    file: Annotated[UploadFile, File(description="Novedad procesal de 1 o 2 fojas en PDF.")],
+    user: Annotated[UserProfileResponse, Depends(get_current_user)],
+) -> dict[str, Any]:
+    """Sube un PDF de 1-2 fojas (la novedad), lo contrasta con el caso y actualiza el semáforo."""
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El archivo de la novedad está vacío.")
+
+    try:
+        return case_tracker.process_case_movement(
+            case_id=case_id,
+            user_email=user.email,
             file_bytes=file_bytes,
-            file_name=file.filename or "expediente.pdf",
+            file_name=file.filename or "novedad.pdf",
         )
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error procesando la pre-cotización en memoria RAM: {exc}",
+            detail=f"Error procesando la novedad procesal: {exc}",
         ) from exc
 
 
-@app.post(
-    "/analyze-expediente",
-    response_model=FinalCitizenReport,
-    status_code=status.HTTP_200_OK,
-    tags=["2. Flujo Completo Agente000 (Ida y Vuelta)"],
-)
-async def analyze_expediente_endpoint(
-    file: Annotated[UploadFile, File(description="Archivo PDF del expediente judicial.")],
-    _session: AdminGuard,
-    user_verbal_statement: Annotated[
-        str,
-        Form(description="Relato del ciudadano: '¿Qué te dijo tu abogado o cuál es tu duda principal?'"),
-    ] = "",
-    province_jurisdiction: Annotated[
-        ProvinceKey | None,
-        Form(description="Jurisdicción procesal opcional (si se omite, Agente000 la detecta del expediente)."),
-    ] = None,
-    user_role: Annotated[
-        UserRole | None,
-        Form(description="Rol del ciudadano en el caso."),
-    ] = None,
-    claimed_lawyer_fee_pct: Annotated[
-        str | None,
-        Form(description="Porcentaje de honorarios o cuota litis informado por el ciudadano (ej. '25.00')."),
-    ] = None,
-    upfront_cost_requested_ars: Annotated[
-        str | None,
-        Form(description="Adelanto de dinero en ARS solicitado al ciudadano para tasas/gastos."),
-    ] = None,
-) -> FinalCitizenReport:
-    """Ejecuta las Fases 1 a 4 de Agente000, guarda el informe en el Drive del usuario y borra la RAM."""
-    fee_dec = _parse_optional_decimal(claimed_lawyer_fee_pct, "claimed_lawyer_fee_pct")
-    upfront_dec = _parse_optional_decimal(upfront_cost_requested_ars, "upfront_cost_requested_ars")
+# =========================================================================
+# PASARELA DE PAGOS MERCADO PAGO LOCAL
+# =========================================================================
 
+@app.post("/payments/create-preference", response_model=CreatePreferenceResponse, tags=["Pagos Mercado Pago"])
+async def create_preference_endpoint(
+    req: CreatePreferenceRequest,
+    user: Annotated[UserProfileResponse, Depends(get_current_user)],
+) -> CreatePreferenceResponse:
+    """Genera una preferencia de pago en Mercado Pago para desbloquear consultas en ARS."""
+    return mp_gateway.create_preference(
+        user_email=user.email,
+        plan_type=req.plan_type,
+        case_id=req.case_id,
+    )
+
+
+@app.post("/payments/webhook", tags=["Pagos Mercado Pago"])
+async def payments_webhook_endpoint(request: Request) -> dict[str, Any]:
+    """Recibe la notificación de pago de Mercado Pago y activa el pase del usuario."""
     try:
-        file_bytes = await file.read()
-        return orchestrator.analyze_full_expediente(
-            file_bytes=file_bytes,
-            file_name=file.filename or "expediente.pdf",
-            user_verbal_statement=user_verbal_statement,
-            explicit_province=province_jurisdiction,
-            explicit_role=user_role,
-            claimed_lawyer_fee_pct=fee_dec,
-            upfront_cost_requested_ars=upfront_dec,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error durante el ciclo de análisis de Agente000: {exc}",
-        ) from exc
+        data = await request.json()
+    except Exception:
+        data = {}
+    return mp_gateway.process_webhook(data)
 
 
-@app.post(
-    "/emergency-scan",
-    response_model=EmergencyScanResponse,
-    status_code=status.HTTP_200_OK,
-    tags=["3. Modo Urgencia '¡No Firmes Todavía!'"],
-)
-async def emergency_scan_endpoint(request: EmergencyScanRequest, _session: AdminGuard) -> EmergencyScanResponse:
-    """Detecta al instante cláusulas abusivas, desistimientos, renuncias o plazos urgentes en un papel o cédula."""
-    try:
-        return orchestrator.run_emergency_scan(request)
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error en el escáner de urgencia: {exc}",
-        ) from exc
+@app.post("/payments/mock-activate", tags=["Pagos Mercado Pago"])
+async def mock_activate_endpoint(
+    user: Annotated[UserProfileResponse, Depends(get_current_user)],
+) -> dict[str, Any]:
+    """Habilita el pase completo para el usuario actual en entorno local o de pruebas."""
+    db.set_user_paid_pass(user.email, True)
+    return {"status": "SUCCESS", "message": f"Pase completo activado para {user.email}"}
 
 
-@app.post(
-    "/repository-consult",
-    response_model=RepositoryConsultResponse,
-    status_code=status.HTTP_200_OK,
-    tags=["4. Consultor de Repositorios Normativos"],
-)
-async def repository_consult_endpoint(
-    request: RepositoryConsultRequest,
-    _session: AdminGuard,
-) -> RepositoryConsultResponse:
-    """Consulta las leyes argentinas vigentes y reglas procesales provinciales con control de vigencia temporal."""
-    try:
-        return orchestrator.consult_normative_repository(request)
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error consultando el repositorio normativo: {exc}",
-        ) from exc
+# =========================================================================
+# SISTEMA, SALUD Y CRON 07:00 AM
+# =========================================================================
+
+@app.get("/health", response_model=SystemHealthReport, tags=["Sistema"])
+async def health_check() -> SystemHealthReport:
+    """Healthcheck de disponibilidad técnica."""
+    return orchestrator.system_watchdog.build_health_report(orchestrator)
+
+
+@app.get("/queue-status", response_model=QueueStatusSnapshot, tags=["Sistema"])
+async def queue_status_endpoint(_user: Annotated[UserProfileResponse, Depends(get_current_user)]) -> QueueStatusSnapshot:
+    """Estado de la cola gratuita de Google AI Studio."""
+    return orchestrator.rate_limiter.get_status_snapshot()
 
 
 @app.post(
     "/cron-07am",
     response_model=list[GamuzaRegulatorySignal],
     status_code=status.HTTP_200_OK,
-    tags=["5. Ingesta 07:00 AM y Puente a Proyecto Gamuza (Bolsa y Acciones)"],
+    tags=["Ingesta Matutina y Gamuza"],
 )
 async def cron_07am_endpoint(
-    _session: AdminGuard,
+    _user: Annotated[UserProfileResponse, Depends(get_current_user)],
     norms: Annotated[
         list[BoletinOficialNormInput] | None,
-        Body(description="Lista opcional de normas (si se omite, colecta el lote oficial argentino de las 07:00 AM)."),
+        Body(description="Lista opcional de normas del Boletín Oficial."),
     ] = None,
 ) -> list[GamuzaRegulatorySignal]:
-    """Ingesta matutina del Boletín Oficial, actualización selectiva por Fuero y despacho a Proyecto Gamuza."""
+    """Ingesta del Boletín Oficial y emisión de señales a Gamuza."""
     try:
         return orchestrator.ingest_07am_and_dispatch_to_gamuza(
             norms=norms,
             use_default_batch_if_none=(norms is None),
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error en el enrutamiento matutino 07:00 AM hacia Gamuza: {exc}",
+            detail=f"Error en la ingesta 07:00 AM: {exc}",
         ) from exc
 
 
 # =========================================================================
-# SERVIDOR ESTÁTICO DE LA INTERFAZ PWA (frontend_pwa/)
-# La pantalla es pública, pero sin token de Administrador solo muestra el login
-# y ningún motor responde.
+# SERVIDOR ESTÁTICO DE LA INTERFAZ PWA CIUDADANA
 # =========================================================================
 
 @app.get("/", include_in_schema=False)
 async def serve_pwa_index() -> FileResponse:
-    """Sirve la pantalla principal de la PWA (login de Administrador)."""
     return FileResponse(FRONTEND_PWA_DIR / "index.html", media_type="text/html")
 
 
 @app.get("/index.html", include_in_schema=False)
 async def serve_pwa_index_explicit() -> FileResponse:
-    """Alias explícito para el App Shell del Service Worker."""
     return FileResponse(FRONTEND_PWA_DIR / "index.html", media_type="text/html")
 
 
 @app.get("/app.js", include_in_schema=False)
 async def serve_pwa_app_js() -> FileResponse:
-    """Sirve el cliente JavaScript asincrónico de la PWA."""
     return FileResponse(FRONTEND_PWA_DIR / "app.js", media_type="application/javascript")
 
 
 @app.get("/sw.js", include_in_schema=False)
 async def serve_pwa_service_worker() -> FileResponse:
-    """Sirve el Service Worker en la raíz del dominio con alcance global."""
     return FileResponse(
         FRONTEND_PWA_DIR / "sw.js",
         media_type="application/javascript",
@@ -507,7 +677,6 @@ async def serve_pwa_service_worker() -> FileResponse:
 
 @app.get("/manifest.json", include_in_schema=False)
 async def serve_pwa_manifest() -> FileResponse:
-    """Sirve el Web App Manifest institucional de Dr. H Argentina."""
     return FileResponse(FRONTEND_PWA_DIR / "manifest.json", media_type="application/manifest+json")
 
 

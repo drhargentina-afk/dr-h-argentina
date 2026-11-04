@@ -86,6 +86,10 @@ class ServerSecurityConfig(BaseModel):
         description="Contraseña del Administrador (ADMIN_PASSWORD), nunca escrita en el código fuente.",
     )
     admin_session_ttl_hours: int = Field(default=12, ge=1, le=168)
+    google_client_id: str = Field(default="", description="Client ID de Google Identity Services OAuth 2.0.")
+    mercadopago_access_token: SecretStr = Field(default=SecretStr(""), description="Token privado de Mercado Pago.")
+    mercadopago_public_key: str = Field(default="", description="Public Key de Mercado Pago.")
+    database_url: str = Field(default="", description="Ruta de base de datos SQLite o DATABASE_URL PostgreSQL.")
     node_country: str = Field(default="AR", min_length=2, max_length=2)
     platform_version: str = Field(default="1.4.0-AR-PWA", min_length=3)
     gemini_model_primary: str = Field(default="gemini-2.5-flash", min_length=3)
@@ -126,6 +130,10 @@ class ServerSecurityConfig(BaseModel):
             admin_user=_get("ADMIN_USER", DEFAULT_ADMIN_USER).strip(),
             admin_password=_resolve_admin_password(_get("ADMIN_PASSWORD", "")),
             admin_session_ttl_hours=ttl_hours,
+            google_client_id=_get("GOOGLE_CLIENT_ID", "").strip(),
+            mercadopago_access_token=SecretStr(_get("MERCADOPAGO_ACCESS_TOKEN", "").strip()),
+            mercadopago_public_key=_get("MERCADOPAGO_PUBLIC_KEY", "").strip(),
+            database_url=_get("DATABASE_URL", "").strip(),
             node_country=_get("DR_H_NODE_COUNTRY", "AR"),
             platform_version=_get("DR_H_PLATFORM_VERSION", "1.4.0-AR-PWA"),
             gemini_model_primary=_get("GEMINI_MODEL_PRIMARY", "gemini-2.5-flash"),

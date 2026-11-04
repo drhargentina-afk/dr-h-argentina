@@ -1,28 +1,83 @@
 /**
- * Cliente Asincrónico Oficial — Dr. H Argentina (Nodo Capa-País AR)
- * Consume los endpoints de FastAPI y Agente000Orchestrator:
+ * Cliente Unificado de Interfaz Ciudadana — Dr. H Argentina
+ * Conecta la pantalla limpia de consulta única con los motores del backend sin exponer jerga técnica:
  * - POST /pre-quote
  * - POST /analyze-expediente
  * - POST /download-report-pdf
  * - POST /emergency-scan
  * - POST /repository-consult
- * - POST /cron-07am
- * - GET  /health
- * - GET  /queue-status
+ * - GET  /demo-sample-pdf
  */
 
 (function () {
   "use strict";
 
-  const state = {
-    selectedFuero: "AUTO",
-    currentPdfBlob: null,
-    currentPdfName: "expediente_judicial.pdf",
-    lastFinalReport: null,
-    platformVersion: null
+  const FUERO_LABELS = {
+    AUTO: "Detección automática",
+    "01_penal": "Penal y Garantías Constitucionales",
+    "02_familia": "Familia y Cuota Alimentaria",
+    "03_laboral": "Laboral y Accidentes de Trabajo (ART)",
+    "04_civil": "Civil, Contratos y Alquileres",
+    "05_comercial_consumidor": "Deudas, Bancos y Defensa del Consumidor",
+    "06_seguridad_social_salud": "Jubilaciones (ANSES) y Salud",
+    "07_contencioso_tributario": "Multas, Impuestos y Reclamos al Estado"
   };
 
-  // --- 1. GESTIÓN DE TEMA CLARO / OSCURO (modern-web-guidance) ---
+  const state = {
+    loggedInUser: null,
+    selectedFuero: "AUTO",
+    currentPdfBlob: null,
+    currentPdfName: "expediente_consulta.pdf",
+    attachedMediaName: null,
+    urgentPhotoMode: false,
+    lastFinalReport: null
+  };
+
+  function humanizeFuero(code) {
+    if (!code) return "General";
+    return FUERO_LABELS[code] || String(code).replace(/_/g, " ");
+  }
+
+  function cleanTechnicalJargon(text) {
+    if (!text) return "";
+    return String(text)
+      .replace(/\[ISO-[A-Z]+-\d+\]:?\s*/g, "")
+      .replace(/Agente000/gi, "Dr. H")
+      .replace(/Zero-Storage en RAM/gi, "procesamiento privado")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function buildFormalEmailText(report, fueroReadable) {
+    const questions = (report.questions_for_your_lawyer || []).map(
+      (q, idx) => `${idx + 1}. ${cleanTechnicalJargon(q)}`
+    );
+    const pointsBlock =
+      questions.length > 0
+        ? questions.join("\n")
+        : "1. Solicito me informe el estado actual del trámite y los próximos pasos previstos.\n2. Solicito copia simple de las últimas presentaciones realizadas.";
+
+    const urgencyLine = report.do_not_sign_yet_alert
+      ? "Asimismo, le informo que previo a suscribir cualquier acuerdo, recibo o escrito dispositivo, necesito revisar el detalle completo de la liquidación y sus alcances legales.\n\n"
+      : "";
+
+    return [
+      "Asunto: Consulta sobre estado de trámite y puntos pendientes",
+      "",
+      "Estimado/a Dr./Dra.:",
+      "",
+      `Me comunico con usted en relación con mi asunto (${fueroReadable}) a fin de solicitarle información actualizada y dejar asentados los siguientes puntos que necesito revisar:`,
+      "",
+      pointsBlock,
+      "",
+      urgencyLine +
+        "Quedo a la espera de su respuesta por esta vía o con copia de las constancias correspondientes.",
+      "",
+      "Atentamente."
+    ].join("\n");
+  }
+
+  // --- 1. TEMA CLARO / OSCURO ---
   function initThemeToggle() {
     const btnToggle = document.getElementById("btn-theme-toggle");
     const metaScheme = document.querySelector('meta[name="color-scheme"]');
@@ -49,7 +104,7 @@
     });
   }
 
-  // --- 2. REGISTRO DE SERVICE WORKER Y AUTO-ACTUALIZACIÓN PWA ---
+  // --- 2. REGISTRO DE SERVICE WORKER ---
   function initServiceWorker() {
     if (!("serviceWorker" in navigator)) return;
     window.addEventListener("load", () => {
@@ -66,256 +121,409 @@
             });
           });
         })
-        .catch((err) => console.warn("Service Worker en modo local:", err));
+        .catch((err) => console.warn("Service Worker local:", err));
     });
   }
 
-  // --- 3. MONITOR DE SALUD (/health) Y COLA GRATUITA (/queue-status) ---
-  async function refreshSystemHealth() {
-    const badgeRam = document.getElementById("badge-zero-storage");
-    const badge07am = document.getElementById("badge-07am");
-    const badgeQueue = document.getElementById("badge-queue");
+  // --- 3. INGRESO DE USUARIO (LOGIN / LOGOUT) ---
+  function setLoggedInView(username) {
+    state.loggedInUser = username;
+    const loginSection = document.getElementById("login-section");
+    const workspace = document.getElementById("app-workspace");
+    const userBadge = document.getElementById("user-session-badge");
+    const btnLogout = document.getElementById("btn-logout");
+
+    if (username) {
+      if (loginSection) loginSection.classList.add("hidden");
+      if (workspace) workspace.classList.remove("hidden");
+      if (userBadge) {
+        userBadge.textContent = `Usuario: ${username}`;
+        userBadge.classList.remove("hidden");
+      }
+      if (btnLogout) btnLogout.classList.remove("hidden");
+    } else {
+      if (loginSection) loginSection.classList.remove("hidden");
+      if (workspace) workspace.classList.add("hidden");
+      if (userBadge) userBadge.classList.add("hidden");
+      if (btnLogout) btnLogout.classList.add("hidden");
+    }
+  }
+
+  function initUserAccess() {
+    const loginForm = document.getElementById("login-form");
+    const userInput = document.getElementById("login-username");
+    const passInput = document.getElementById("login-password");
+    const feedback = document.getElementById("login-feedback");
+    const btnLogout = document.getElementById("btn-logout");
 
     try {
-      const [healthResp, queueResp] = await Promise.all([
-        fetch("/health"),
-        fetch("/queue-status")
-      ]);
+      const savedUser = sessionStorage.getItem("drh_active_user");
+      if (savedUser) {
+        setLoggedInView(savedUser);
+      }
+    } catch (err) {
+      console.warn("Sesión en memoria:", err);
+    }
 
-      if (healthResp.ok) {
-        const health = await healthResp.json();
-        if (badgeRam) {
-          badgeRam.textContent = health.ram_zero_storage_clean
-            ? `RAM Zero-Storage: Limpia (${health.active_volatile_ram_sessions} sesiones)`
-            : `RAM Activa: ${health.active_volatile_ram_sessions} sesión en curso`;
+    if (loginForm) {
+      loginForm.addEventListener("submit", (ev) => {
+        ev.preventDefault();
+        const username = userInput?.value.trim() || "";
+        const password = passInput?.value.trim() || "";
+
+        if (username.length < 3 || password.length < 4) {
+          if (feedback) {
+            feedback.className = "state-banner error";
+            feedback.classList.remove("hidden");
+            feedback.textContent = "Ingresá un usuario válido (mínimo 3 caracteres) y tu contraseña.";
+          }
+          return;
         }
-        if (badge07am) {
-          const smvm = health.current_economic_parameters?.smvm_decreto_484_87_ars || "310000.00";
-          badge07am.textContent = health.is_normative_db_up_to_date
-            ? `07:00 AM Al Día (${health.total_norms_ingested_today} normas | SMVM $${smvm})`
-            : `07:00 AM Pendiente Sync (SMVM base $${smvm})`;
-          badge07am.className = health.is_normative_db_up_to_date ? "badge-pill ok" : "badge-pill";
+
+        if (feedback) feedback.classList.add("hidden");
+        try {
+          sessionStorage.setItem("drh_active_user", username);
+        } catch (err) {
+          console.warn("No se pudo persistir en sessionStorage:", err);
         }
-        if (state.platformVersion && state.platformVersion !== health.platform_version) {
-          if ("serviceWorker" in navigator && navigator.serviceWorker.controller) {
-            navigator.serviceWorker.controller.postMessage({ type: "SKIP_WAITING" });
+        setLoggedInView(username);
+      });
+    }
+
+    if (btnLogout) {
+      btnLogout.addEventListener("click", () => {
+        try {
+          sessionStorage.removeItem("drh_active_user");
+        } catch (err) {
+          console.warn("Error limpiando sesión:", err);
+        }
+        if (passInput) passInput.value = "";
+        setLoggedInView(null);
+      });
+    }
+  }
+
+  // --- 4. PREGUNTA OPCIONAL DE FUERO Y ARCHIVOS ADJUNTOS ---
+  function initUnifiedInputControls() {
+    const radioAuto = document.getElementById("radio-fuero-auto");
+    const radioManual = document.getElementById("radio-fuero-manual");
+    const manualWrap = document.getElementById("manual-fuero-wrap");
+    const selectFuero = document.getElementById("select-fuero-manual");
+
+    const updateFueroMode = () => {
+      if (radioManual && radioManual.checked) {
+        manualWrap?.classList.remove("hidden");
+        state.selectedFuero = selectFuero?.value || "AUTO";
+      } else {
+        manualWrap?.classList.add("hidden");
+        state.selectedFuero = "AUTO";
+      }
+    };
+
+    radioAuto?.addEventListener("change", updateFueroMode);
+    radioManual?.addEventListener("change", updateFueroMode);
+    selectFuero?.addEventListener("change", () => {
+      state.selectedFuero = selectFuero.value || "AUTO";
+    });
+
+    const fileInput = document.getElementById("pdf-file-input");
+    const attachStatus = document.getElementById("attachment-status-text");
+    if (fileInput) {
+      fileInput.addEventListener("change", async (ev) => {
+        const file = ev.target.files?.[0];
+        if (!file) return;
+
+        if (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
+          state.currentPdfBlob = file;
+          state.currentPdfName = file.name;
+          state.attachedMediaName = null;
+          if (attachStatus) {
+            attachStatus.textContent = `Archivo cargado listo para analizar: ${file.name}`;
+          }
+          // Pre-procesamiento silencioso en segundo plano
+          try {
+            const formData = new FormData();
+            formData.append("file", file, file.name);
+            await fetch("/pre-quote", { method: "POST", body: formData });
+          } catch (err) {
+            console.warn("Pre-lectura silenciosa:", err);
+          }
+        } else {
+          state.attachedMediaName = file.name;
+          if (attachStatus) {
+            attachStatus.textContent = `Audio adjuntado: ${file.name}. Sumá una breve nota arriba si querés detallar algo puntual.`;
           }
         }
-        state.platformVersion = health.platform_version;
-      }
-
-      if (queueResp.ok && badgeQueue) {
-        const q = await queueResp.json();
-        badgeQueue.textContent = `Cola IA Gratis: ${q.requests_in_last_60s}/${q.max_requests_per_minute} RPM (429 recuperados: ${q.total_429_intercepted})`;
-      }
-    } catch (err) {
-      if (badge07am) {
-        badge07am.textContent = "Estado Servidor: Sin conexión temporal";
-      }
-    }
-  }
-
-  // --- 4. PRE-COTIZADOR E HIGIENE EN RAM (/pre-quote) ---
-  function setProgressBar(percent) {
-    const bar = document.getElementById("upload-progress-bar");
-    const fill = document.getElementById("upload-progress-fill");
-    if (bar) bar.setAttribute("aria-valuenow", String(percent));
-    if (fill) fill.style.width = `${percent}%`;
-  }
-
-  async function runPreQuote(pdfBlob, fileName) {
-    const banner = document.getElementById("prequote-state-banner");
-    const elTotal = document.getElementById("metric-total-pages");
-    const elUseful = document.getElementById("metric-useful-pages");
-    const elJunk = document.getElementById("metric-junk-pages");
-    const elTier = document.getElementById("metric-tier");
-    const elPrice = document.getElementById("metric-price-ars");
-    const elPreserved = document.getElementById("preserved-fojas-list");
-
-    state.currentPdfBlob = pdfBlob;
-    state.currentPdfName = fileName;
-
-    if (banner) {
-      banner.className = "state-banner";
-      banner.textContent = `Analizando higiene documental de "${fileName}" en memoria RAM...`;
-    }
-    setProgressBar(35);
-
-    try {
-      const formData = new FormData();
-      formData.append("file", pdfBlob, fileName);
-
-      const resp = await fetch("/pre-quote", {
-        method: "POST",
-        body: formData
       });
-      setProgressBar(100);
+    }
 
-      if (!resp.ok) {
-        const errData = await resp.json().catch(() => ({ detail: "Error en pre-cotización" }));
-        throw new Error(errData.detail || `HTTP ${resp.status}`);
-      }
+    const btnCamera = document.getElementById("btn-camera-urgent");
+    const cameraInput = document.getElementById("camera-file-input");
+    const cameraStatus = document.getElementById("camera-status-text");
+    const verbalInput = document.getElementById("input-verbal-statement");
 
-      const data = await resp.json();
-      if (elTotal) elTotal.textContent = String(data.total_pages);
-      if (elUseful) elUseful.textContent = String(data.useful_pages_after_hygiene);
-      if (elJunk) elJunk.textContent = String(data.discarded_junk_pages);
-      if (elTier) {
-        elTier.textContent = data.qualifies_for_free_tier
-          ? "Nivel 0 Gratuito"
-          : data.suggested_tier.replace(/_/g, " ");
-      }
-      if (elPrice) {
-        elPrice.textContent = `$${data.estimated_single_radiography_ars} ARS (Único) | $${data.estimated_monthly_tracking_ars}/mes`;
-      }
-      if (elPreserved) {
-        elPreserved.textContent = `Índice de Fojas Reales Preservadas: [${data.preserved_foja_index.join(", ")}] (${data.processing_time_ms} ms en RAM)`;
-      }
-      if (banner) {
-        banner.className = "state-banner success";
-        banner.textContent = `Pre-cotización completada en ${data.processing_time_ms} ms: ${data.useful_pages_after_hygiene} fojas útiles y ${data.discarded_junk_pages} páginas basura descartadas.`;
-      }
-      await refreshSystemHealth();
-    } catch (err) {
-      setProgressBar(0);
-      if (banner) {
-        banner.className = "state-banner error";
-        banner.textContent = `Error en Pre-Cotizador: ${err.message}`;
-      }
+    if (btnCamera && cameraInput) {
+      btnCamera.addEventListener("click", () => {
+        state.urgentPhotoMode = true;
+        cameraInput.click();
+      });
+
+      cameraInput.addEventListener("change", async (ev) => {
+        const file = ev.target.files?.[0];
+        if (!file) return;
+
+        state.urgentPhotoMode = true;
+        if (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
+          state.currentPdfBlob = file;
+          state.currentPdfName = file.name;
+        } else {
+          state.attachedMediaName = file.name;
+        }
+
+        if (cameraStatus) {
+          cameraStatus.textContent = `Imagen/documento "${file.name}" capturado. Analizando si es seguro firmar...`;
+        }
+        if (verbalInput && !verbalInput.value.trim()) {
+          verbalInput.value =
+            "Me piden firmar este documento ahora mismo (recibo / acuerdo con renuncia de reclamos). ¿Lo puedo firmar o espero?";
+        }
+        await runUnifiedConsultation();
+      });
     }
   }
 
-  // --- 5. CICLO COMPLETO AGENTE000 (/analyze-expediente) ---
-  function renderFinalCitizenReport(report) {
+  // --- 5. RENDERIZADO DE LA RESPUESTA PRÁCTICA ---
+  function renderUnifiedResponse(report) {
     state.lastFinalReport = report;
 
     const emptyState = document.getElementById("report-empty-state");
-    const contentGrid = document.getElementById("report-content-grid");
-    const timelineWrap = document.getElementById("report-timeline-wrap");
+    const contentWrap = document.getElementById("report-content-wrap");
+    const subtitle = document.getElementById("report-meta-subtitle");
+    const fueroBadge = document.getElementById("result-detected-fuero");
     const doNotSignBanner = document.getElementById("do-not-sign-banner");
+    const doNotSignTitle = document.getElementById("do-not-sign-title");
     const doNotSignText = document.getElementById("do-not-sign-text");
+    const plainSummary = document.getElementById("report-plain-summary");
+    const auditSection = document.getElementById("report-audit-section");
+    const qWrap = document.getElementById("report-questions-wrap");
+    const qList = document.getElementById("report-questions-list");
+    const audioScript = document.getElementById("report-audio-script");
+    const waText = document.getElementById("report-whatsapp-text");
+    const emailText = document.getElementById("report-email-text");
     const btnDownloadPdf = document.getElementById("btn-download-pdf");
 
     if (emptyState) emptyState.classList.add("hidden");
-    if (contentGrid) contentGrid.classList.remove("hidden");
-    if (timelineWrap) timelineWrap.classList.remove("hidden");
+    if (contentWrap) contentWrap.classList.remove("hidden");
     if (btnDownloadPdf) btnDownloadPdf.disabled = false;
 
-    const subtitle = document.getElementById("report-meta-subtitle");
+    const fueroReadable = humanizeFuero(report.fuero);
+    if (fueroBadge) {
+      fueroBadge.textContent = `Fuero detectado: ${fueroReadable}`;
+      fueroBadge.classList.remove("hidden");
+    }
     if (subtitle) {
-      subtitle.textContent = `Informe ID: ${report.report_id} | Fuero: ${report.fuero} | Jurisdicción: ${report.province_jurisdiction} | Emitido: ${report.generated_at_iso}`;
+      subtitle.textContent = `Dictamen listo sobre tu consulta de ${fueroReadable}.`;
     }
 
-    if (report.do_not_sign_yet_alert && doNotSignBanner && doNotSignText) {
-      doNotSignBanner.classList.remove("hidden");
-      doNotSignText.textContent = report.do_not_sign_alert_box || "Se detectaron cláusulas dispositivas riesgosas.";
-    } else if (doNotSignBanner) {
-      doNotSignBanner.classList.add("hidden");
+    if (doNotSignBanner && doNotSignTitle && doNotSignText) {
+      if (report.do_not_sign_yet_alert) {
+        doNotSignBanner.className = "urgency-banner danger";
+        doNotSignTitle.textContent = "⚠️ No firmes nada todavía";
+        doNotSignText.textContent = cleanTechnicalJargon(
+          report.do_not_sign_alert_box ||
+            "Detectamos puntos delicados que pueden hacerte perder derechos o plata si firmás sin revisarlo antes."
+        );
+      } else {
+        doNotSignBanner.className = "urgency-banner safe";
+        doNotSignTitle.textContent = "✅ Podés avanzar con tranquilidad";
+        doNotSignText.textContent =
+          "No se detectaron cláusulas trampa de renuncia de derechos en los datos ingresados. Seguí las recomendaciones de abajo.";
+      }
     }
 
-    const plainSummary = document.getElementById("report-plain-summary");
-    if (plainSummary) plainSummary.textContent = report.citizen_plain_summary;
+    if (plainSummary) {
+      plainSummary.textContent = cleanTechnicalJargon(report.citizen_plain_summary);
+    }
+    if (auditSection) {
+      auditSection.textContent = cleanTechnicalJargon(report.audit_and_deadlines_section);
+    }
 
-    const auditSection = document.getElementById("report-audit-section");
-    if (auditSection) auditSection.textContent = report.audit_and_deadlines_section;
-
-    const qList = document.getElementById("report-questions-list");
-    if (qList) {
+    if (qList && qWrap) {
       qList.innerHTML = "";
-      (report.questions_for_your_lawyer || []).forEach((q) => {
-        const li = document.createElement("li");
-        li.textContent = q;
-        qList.appendChild(li);
-      });
+      const questions = report.questions_for_your_lawyer || [];
+      if (questions.length > 0) {
+        qWrap.classList.remove("hidden");
+        questions.forEach((q) => {
+          const li = document.createElement("li");
+          li.textContent = cleanTechnicalJargon(q);
+          qList.appendChild(li);
+        });
+      } else {
+        qWrap.classList.add("hidden");
+      }
     }
 
-    const audioScript = document.getElementById("report-audio-script");
-    if (audioScript) audioScript.textContent = report.audio_script_90_seconds;
-
-    const waText = document.getElementById("report-whatsapp-text");
-    if (waText) waText.value = report.whatsapp_ready_message;
-
-    const timelineCards = document.getElementById("report-timeline-cards");
-    if (timelineCards) {
-      timelineCards.innerHTML = "";
-      (report.verified_timeline_cards || []).forEach((card) => {
-        const div = document.createElement("div");
-        div.className = "foja-card";
-        div.innerHTML = `
-          <div class="foja-card-head">
-            <span>Foja N° ${card.foja_ref} — ${card.document_piece_type}</span>
-            <span style="color:var(--accent-brand);font-size:0.8rem;">${card.normative_ref}</span>
-          </div>
-          <p style="font-size:0.88rem;"><strong>Traducción Ciudadana:</strong> ${card.citizen_plain_translation}</p>
-          <p style="font-size:0.8rem;color:var(--text-secondary);"><em>Extracto verificable:</em> "${card.verbatim_excerpt}"</p>
-        `;
-        timelineCards.appendChild(div);
-      });
+    if (audioScript) {
+      audioScript.textContent = cleanTechnicalJargon(
+        report.audio_script_90_seconds || report.citizen_plain_summary
+      );
     }
 
-    const shieldEl = document.getElementById("report-shield-disclaimer");
-    if (shieldEl) shieldEl.textContent = report.legal_shield_disclaimer;
+    if (waText) {
+      waText.value = cleanTechnicalJargon(report.whatsapp_ready_message);
+    }
 
-    const certEl = document.getElementById("report-zero-storage-cert");
-    if (certEl) certEl.textContent = report.zero_storage_confirmation;
+    if (emailText) {
+      emailText.value = buildFormalEmailText(report, fueroReadable);
+    }
   }
 
-  async function runFullExpedienteAnalysis() {
-    const emptyState = document.getElementById("report-empty-state");
-    if (!state.currentPdfBlob) {
-      if (emptyState) {
-        emptyState.className = "state-banner error";
-        emptyState.classList.remove("hidden");
-        emptyState.textContent = "Primero seleccioná un archivo PDF o hacé clic en 'Cargar Expediente de Prueba' en el Paso 1.";
+  // --- 6. FLUJO UNIFICADO DE CONSULTA (UN SOLO BOTÓN PARA TODO) ---
+  async function runUnifiedConsultation() {
+    const statusBanner = document.getElementById("consultation-state-banner");
+    const verbalText = document.getElementById("input-verbal-statement")?.value.trim() || "";
+
+    if (!state.currentPdfBlob && verbalText.length < 5 && !state.attachedMediaName) {
+      if (statusBanner) {
+        statusBanner.className = "state-banner error";
+        statusBanner.classList.remove("hidden");
+        statusBanner.textContent =
+          "Por favor escribí tu consulta, pegá lo que te dijo tu abogado o adjuntá un archivo para que Dr. H pueda ayudarte.";
       }
       return;
     }
 
-    if (emptyState) {
-      emptyState.className = "state-banner";
-      emptyState.classList.remove("hidden");
-      emptyState.textContent = "Ejecutando Ciclo Ida y Vuelta de Agente000 (Anonimización PII -> Fuero -> Auditor ISO-Compliance -> Wipe RAM)...";
+    if (statusBanner) {
+      statusBanner.className = "state-banner";
+      statusBanner.classList.remove("hidden");
+      statusBanner.textContent = "Analizando tu consulta y preparando las respuestas listas para usar...";
     }
 
     try {
-      const formData = new FormData();
-      formData.append("file", state.currentPdfBlob, state.currentPdfName);
+      // Caso A: El usuario subió un PDF (o cargó el ejemplo práctico)
+      if (state.currentPdfBlob) {
+        const formData = new FormData();
+        formData.append("file", state.currentPdfBlob, state.currentPdfName);
+        formData.append(
+          "user_verbal_statement",
+          verbalText || "Solicito revisión integral del expediente y pasos a seguir."
+        );
 
-      const verbal = document.getElementById("input-verbal-statement")?.value || "";
-      const prov = document.getElementById("select-province")?.value || "";
-      const role = document.getElementById("select-role")?.value || "";
-      const feePct = document.getElementById("input-fee-pct")?.value || "";
-      const upfrontArs = document.getElementById("input-upfront-ars")?.value || "";
+        const resp = await fetch("/analyze-expediente", {
+          method: "POST",
+          body: formData
+        });
 
-      formData.append("user_verbal_statement", verbal);
-      if (prov) formData.append("province_jurisdiction", prov);
-      if (role) formData.append("user_role", role);
-      if (feePct) formData.append("claimed_lawyer_fee_pct", feePct);
-      if (upfrontArs) formData.append("upfront_cost_requested_ars", upfrontArs);
+        if (!resp.ok) {
+          const errData = await resp.json().catch(() => ({ detail: "No se pudo procesar el archivo PDF." }));
+          throw new Error(errData.detail || `HTTP ${resp.status}`);
+        }
 
-      const resp = await fetch("/analyze-expediente", {
-        method: "POST",
-        body: formData
-      });
+        const report = await resp.json();
+        if (state.selectedFuero && state.selectedFuero !== "AUTO") {
+          report.fuero = state.selectedFuero;
+        }
+        renderUnifiedResponse(report);
+      } else {
+        // Caso B: El usuario escribió su consulta en criollo, pegó lo que le piden firmar o usó la cámara/audio
+        const queryText =
+          verbalText ||
+          `Consulta sobre archivo adjunto (${state.attachedMediaName || "documento"}). ¿Qué debo tener en cuenta antes de firmar o avanzar?`;
 
-      if (!resp.ok) {
-        const errData = await resp.json().catch(() => ({ detail: "Error en análisis de expediente" }));
-        throw new Error(errData.detail || `HTTP ${resp.status}`);
+        const consultPayload = {
+          query: queryText,
+          province_jurisdiction: "PJN_NACION_CABA"
+        };
+        if (state.selectedFuero && state.selectedFuero !== "AUTO") {
+          consultPayload.fuero = state.selectedFuero;
+        }
+
+        const [scanResp, repoResp] = await Promise.all([
+          fetch("/emergency-scan", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              document_text: queryText.length >= 10 ? queryText : `${queryText} — revisión preventiva`,
+              province_jurisdiction: "PJN_NACION_CABA",
+              user_context_note: state.urgentPhotoMode ? "Escáner de urgencia cámara" : "Consulta unificada"
+            })
+          }),
+          fetch("/repository-consult", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(consultPayload)
+          })
+        ]);
+
+        if (!scanResp.ok || !repoResp.ok) {
+          throw new Error("No se pudo completar la consulta en este momento.");
+        }
+
+        const scanData = await scanResp.json();
+        const repoData = await repoResp.json();
+
+        const resolvedFuero =
+          state.selectedFuero !== "AUTO"
+            ? state.selectedFuero
+            : repoData.classified_fuero || scanData.detected_fuero || "03_laboral";
+
+        const doNotSign = Boolean(scanData.do_not_sign_yet || state.urgentPhotoMode && scanData.urgency_level !== "VERDE_INFORMATIVO");
+        const questions = [
+          "¿Me puede enviar por escrito el detalle de los pasos que siguen y los plazos estimados?",
+          "Antes de firmar cualquier escrito o acuerdo, ¿me puede adelantar una copia para leerla tranquilo/a en casa?",
+          "¿Existe algún gasto o beneficio de gratuidad que me corresponda según la ley vigente?"
+        ];
+
+        const whatsappMsg = doNotSign
+          ? "Hola Doc, antes de firmar o avanzar con lo que conversamos, prefiero que me pase una copia completa por acá para leerla tranquilo/a y revisar bien la liquidación y los puntos del acuerdo. ¡Gracias!"
+          : "Hola Doc, le escribo para pedirle si me puede comentar brevemente cómo sigue mi trámite, qué plazos tenemos por delante y si hace falta que le acerque alguna documentación adicional. ¡Muchas gracias!";
+
+        const synthesizedReport = {
+          report_id: `drh-${Date.now().toString(16).slice(-10)}`,
+          session_id: `ses-${Date.now()}`,
+          generated_at_iso: new Date().toISOString(),
+          fuero: resolvedFuero,
+          province_jurisdiction: "PJN_NACION_CABA",
+          citizen_plain_summary: `${repoData.citizen_clear_answer} ${scanData.plain_explanation}`,
+          verified_timeline_cards: [
+            {
+              foja_ref: 1,
+              document_piece_type: "Consulta Ciudadana",
+              verbatim_excerpt: queryText.slice(0, 140),
+              citizen_plain_translation: repoData.citizen_clear_answer,
+              normative_ref: (repoData.matched_articles && repoData.matched_articles[0]?.law_or_code) || "Legislación Nacional Vigente"
+            }
+          ],
+          audit_and_deadlines_section: `${scanData.immediate_action_guide} (${repoData.temporal_validity_note})`,
+          do_not_sign_yet_alert: doNotSign,
+          do_not_sign_alert_box: doNotSign
+            ? `${scanData.plain_explanation} ${scanData.immediate_action_guide}`
+            : null,
+          questions_for_your_lawyer: questions,
+          whatsapp_ready_message: whatsappMsg,
+          audio_script_90_seconds: `${repoData.citizen_clear_answer}. ${scanData.immediate_action_guide}`,
+          zero_storage_confirmation: "Privacidad protegida: tu consulta fue procesada de forma confidencial.",
+          legal_shield_disclaimer: "Orientación informativa basada en la legislación argentina vigente."
+        };
+
+        renderUnifiedResponse(synthesizedReport);
       }
 
-      const report = await resp.json();
-      renderFinalCitizenReport(report);
-      await refreshSystemHealth();
+      state.urgentPhotoMode = false;
+      if (statusBanner) {
+        statusBanner.className = "state-banner success";
+        statusBanner.textContent = "¡Listo! Abajo tenés la respuesta clara y los textos preparados para copiar.";
+      }
     } catch (err) {
-      if (emptyState) {
-        emptyState.className = "state-banner error";
-        emptyState.classList.remove("hidden");
-        emptyState.textContent = `Error en Agente000: ${err.message}`;
+      if (statusBanner) {
+        statusBanner.className = "state-banner error";
+        statusBanner.classList.remove("hidden");
+        statusBanner.textContent = `No pudimos procesar la consulta: ${err.message}`;
       }
     }
   }
 
-  // --- 6. DESCARGA DE PDF AUDITADO GENERADO EN RAM (/download-report-pdf) ---
+  // --- 7. DESCARGA DE INFORME EN PDF (/download-report-pdf) ---
   async function downloadAuditedPdf() {
     if (!state.lastFinalReport) return;
     try {
@@ -337,24 +545,26 @@
       link.remove();
       URL.revokeObjectURL(url);
     } catch (err) {
-      alert(`No se pudo descargar el PDF auditado: ${err.message}`);
+      alert(`No se pudo descargar el PDF: ${err.message}`);
     }
   }
 
-  // --- 7. REPRODUCTOR DE AUDIO DE 90 SEGUNDOS Y PLANTILLA DE WHATSAPP ---
-  function initAudioAndWhatsAppControls() {
+  // --- 8. CONTROLES DE AUDIO, WHATSAPP Y EMAIL ---
+  function initResponseActionButtons() {
     const btnPlay = document.getElementById("btn-play-audio");
     const btnStop = document.getElementById("btn-stop-audio");
     const statusLbl = document.getElementById("audio-status-label");
     const btnCopyWa = document.getElementById("btn-copy-whatsapp");
     const btnOpenWa = document.getElementById("btn-open-whatsapp");
+    const btnCopyEmail = document.getElementById("btn-copy-email");
+    const btnOpenEmail = document.getElementById("btn-open-email");
 
     if (btnPlay) {
       btnPlay.addEventListener("click", () => {
         const scriptText = document.getElementById("report-audio-script")?.textContent || "";
         if (!scriptText) return;
         if (!("speechSynthesis" in window)) {
-          if (statusLbl) statusLbl.textContent = "Síntesis de voz no disponible en este navegador.";
+          if (statusLbl) statusLbl.textContent = "Tu navegador no admite lectura por voz.";
           return;
         }
         window.speechSynthesis.cancel();
@@ -362,10 +572,10 @@
         utterance.lang = "es-AR";
         utterance.rate = 0.98;
         utterance.onstart = () => {
-          if (statusLbl) statusLbl.textContent = "Reproduciendo guion de 90 segundos...";
+          if (statusLbl) statusLbl.textContent = "Escuchando explicación...";
         };
         utterance.onend = () => {
-          if (statusLbl) statusLbl.textContent = "Reproducción finalizada.";
+          if (statusLbl) statusLbl.textContent = "Lectura finalizada.";
         };
         window.speechSynthesis.speak(utterance);
       });
@@ -375,7 +585,7 @@
       btnStop.addEventListener("click", () => {
         if ("speechSynthesis" in window) {
           window.speechSynthesis.cancel();
-          if (statusLbl) statusLbl.textContent = "Audio detenido.";
+          if (statusLbl) statusLbl.textContent = "Voz detenida.";
         }
       });
     }
@@ -386,12 +596,12 @@
         if (!waText) return;
         try {
           await navigator.clipboard.writeText(waText);
-          btnCopyWa.textContent = "¡Copiado al Portapapeles!";
+          btnCopyWa.textContent = "¡Texto copiado!";
           setTimeout(() => {
-            btnCopyWa.textContent = "Copiar Texto para WhatsApp";
+            btnCopyWa.textContent = "Copiar texto";
           }, 2000);
         } catch (err) {
-          console.warn("Error copiando al portapapeles:", err);
+          console.warn("No se pudo copiar al portapapeles:", err);
         }
       });
     }
@@ -404,198 +614,67 @@
         window.open(`https://wa.me/?text=${encoded}`, "_blank", "noopener,noreferrer");
       });
     }
-  }
 
-  // --- 8. ESCÁNER DE URGENCIA "¡NO FIRMES TODAVÍA!" (/emergency-scan) ---
-  async function runEmergencyScan() {
-    const docText = document.getElementById("emergency-doc-text")?.value.trim() || "";
-    const outBox = document.getElementById("emergency-scan-output");
-    const prov = document.getElementById("select-province")?.value || "PJN_NACION_CABA";
-
-    if (!docText || docText.length < 10) {
-      if (outBox) {
-        outBox.className = "state-banner error";
-        outBox.textContent = "Ingresá al menos 10 caracteres del documento o acta para escanear.";
-      }
-      return;
-    }
-
-    if (outBox) {
-      outBox.className = "state-banner";
-      outBox.textContent = "Ejecutando detector preventivo de actos dispositivos [ISO-PREV-04]...";
-    }
-
-    try {
-      const resp = await fetch("/emergency-scan", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          document_text: docText,
-          province_jurisdiction: prov,
-          user_context_note: "Escaneo desde panel ciudadano PWA"
-        })
-      });
-      if (!resp.ok) {
-        const err = await resp.json().catch(() => ({ detail: "Error en escaneo de urgencia" }));
-        throw new Error(err.detail || `HTTP ${resp.status}`);
-      }
-      const data = await resp.json();
-      if (outBox) {
-        outBox.className = data.do_not_sign_yet ? "state-banner error" : "state-banner success";
-        const clausesHtml = (data.detected_risk_clauses || []).join(" | ");
-        outBox.innerHTML = `
-          <strong>Semáforo: ${data.urgency_level} (Fuero: ${data.detected_fuero})</strong><br>
-          <span>${data.plain_explanation}</span><br>
-          ${clausesHtml ? `<strong>Hallazgos:</strong> ${clausesHtml}<br>` : ""}
-          <strong>Guía de Acción Inmediata:</strong> ${data.immediate_action_guide}
-        `;
-      }
-    } catch (err) {
-      if (outBox) {
-        outBox.className = "state-banner error";
-        outBox.textContent = `Error en Escáner: ${err.message}`;
-      }
-    }
-  }
-
-  // --- 9. CONSULTOR DE REPOSITORIOS (/repository-consult) Y SINCRONIZACIÓN 07:00 AM (/cron-07am) ---
-  async function runRepositoryConsult() {
-    const query = document.getElementById("repo-query-input")?.value.trim() || "";
-    const outBox = document.getElementById("repo-consult-output");
-    const prov = document.getElementById("select-province")?.value || "PJN_NACION_CABA";
-
-    if (!query || query.length < 5) {
-      if (outBox) {
-        outBox.className = "state-banner error";
-        outBox.textContent = "Ingresá una consulta de al menos 5 caracteres.";
-      }
-      return;
-    }
-
-    try {
-      const payload = {
-        query: query,
-        province_jurisdiction: prov
-      };
-      if (state.selectedFuero && state.selectedFuero !== "AUTO") {
-        payload.fuero = state.selectedFuero;
-      }
-
-      const resp = await fetch("/repository-consult", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      });
-      if (!resp.ok) {
-        const err = await resp.json().catch(() => ({ detail: "Error en consulta normativa" }));
-        throw new Error(err.detail || `HTTP ${resp.status}`);
-      }
-      const data = await resp.json();
-      if (outBox) {
-        outBox.className = "state-banner success";
-        outBox.innerHTML = `
-          <strong>Fuero Clasificado: ${data.classified_fuero} (${data.province_jurisdiction})</strong><br>
-          <span>${data.citizen_clear_answer}</span><br>
-          <em>${data.temporal_validity_note}</em>
-        `;
-      }
-    } catch (err) {
-      if (outBox) {
-        outBox.className = "state-banner error";
-        outBox.textContent = `Error en Consultor: ${err.message}`;
-      }
-    }
-  }
-
-  async function triggerMorning07amSync() {
-    const outBox = document.getElementById("repo-consult-output");
-    if (outBox) {
-      outBox.className = "state-banner";
-      outBox.textContent = "Ejecutando ingesta matutina 07:00 AM (BORA, BCRA, INDEC, SMVM, ARCA, CSJN) y despachando señales a Proyecto Gamuza...";
-    }
-    try {
-      const resp = await fetch("/cron-07am", { method: "POST" });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const signals = await resp.json();
-      const tickers = Array.from(new Set(signals.flatMap((s) => s.direct_tickers_byma_nyse || []))).join(", ");
-      if (outBox) {
-        outBox.className = "state-banner success";
-        outBox.innerHTML = `
-          <strong>Sincronización 07:00 AM Completada (${signals.length} Normas Oficiales Procesadas):</strong><br>
-          <span>Calculadoras INDEC, SMVM Decreto 484/87 e ICL actualizadas en caliente.</span><br>
-          <span>Señales enviadas a Proyecto Gamuza (Tickers BYMA/NYSE alcanzados: ${tickers}).</span>
-        `;
-      }
-      await refreshSystemHealth();
-    } catch (err) {
-      if (outBox) {
-        outBox.className = "state-banner error";
-        outBox.textContent = `Error sincronizando 07:00 AM: ${err.message}`;
-      }
-    }
-  }
-
-  // --- 10. EXPEDIENTE DE DEMOSTRACIÓN DESDE SERVIDOR (/demo-sample-pdf) ---
-  async function loadDemoExpediente() {
-    try {
-      const resp = await fetch("/demo-sample-pdf");
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const pdfBlob = await resp.blob();
-      const verbalInput = document.getElementById("input-verbal-statement");
-      const feeInput = document.getElementById("input-fee-pct");
-      const upfrontInput = document.getElementById("input-upfront-ars");
-      if (verbalInput && !verbalInput.value) {
-        verbalInput.value = "Me informaron que ya pidió sentencia y que abone $45000 para tasa de justicia.";
-      }
-      if (feeInput && !feeInput.value) feeInput.value = "30";
-      if (upfrontInput && !upfrontInput.value) upfrontInput.value = "45000";
-      await runPreQuote(pdfBlob, "Expediente_Laboral_Demo_SCBA.pdf");
-    } catch (err) {
-      console.error("Error cargando PDF de prueba:", err);
-    }
-  }
-
-  // --- INICIALIZACIÓN DE EVENTOS DOM ---
-  document.addEventListener("DOMContentLoaded", () => {
-    initThemeToggle();
-    initServiceWorker();
-    initAudioAndWhatsAppControls();
-    refreshSystemHealth();
-
-    const fileInput = document.getElementById("pdf-file-input");
-    if (fileInput) {
-      fileInput.addEventListener("change", (ev) => {
-        const file = ev.target.files?.[0];
-        if (file) {
-          runPreQuote(file, file.name);
+    if (btnCopyEmail) {
+      btnCopyEmail.addEventListener("click", async () => {
+        const emailVal = document.getElementById("report-email-text")?.value || "";
+        if (!emailVal) return;
+        try {
+          await navigator.clipboard.writeText(emailVal);
+          btnCopyEmail.textContent = "¡Texto copiado!";
+          setTimeout(() => {
+            btnCopyEmail.textContent = "Copiar texto";
+          }, 2000);
+        } catch (err) {
+          console.warn("No se pudo copiar el email:", err);
         }
       });
     }
 
-    document.getElementById("btn-demo-pdf")?.addEventListener("click", loadDemoExpediente);
-    document.getElementById("btn-run-full-analysis")?.addEventListener("click", runFullExpedienteAnalysis);
-    document.getElementById("btn-download-pdf")?.addEventListener("click", downloadAuditedPdf);
-    document.getElementById("btn-run-emergency-scan")?.addEventListener("click", runEmergencyScan);
-    document.getElementById("btn-demo-emergency")?.addEventListener("click", () => {
-      const el = document.getElementById("emergency-doc-text");
-      if (el) {
-        el.value =
-          "Recibí conforme el total y declaro que nada más tengo que reclamar por despido, suscribiendo desistimiento de la acción y del derecho y pacto de cuota litis del 35%.";
-        runEmergencyScan();
-      }
-    });
-    document.getElementById("btn-run-repo-consult")?.addEventListener("click", runRepositoryConsult);
-    document.getElementById("btn-trigger-07am")?.addEventListener("click", triggerMorning07amSync);
-
-    const pillsContainer = document.getElementById("fuero-selector-pills");
-    if (pillsContainer) {
-      pillsContainer.querySelectorAll(".fuero-chip").forEach((btn) => {
-        btn.addEventListener("click", () => {
-          pillsContainer.querySelectorAll(".fuero-chip").forEach((b) => b.classList.remove("active"));
-          btn.classList.add("active");
-          state.selectedFuero = btn.getAttribute("data-fuero") || "AUTO";
-        });
+    if (btnOpenEmail) {
+      btnOpenEmail.addEventListener("click", () => {
+        const emailVal = document.getElementById("report-email-text")?.value || "";
+        if (!emailVal) return;
+        const subject = encodeURIComponent("Consulta sobre estado de mi trámite");
+        const body = encodeURIComponent(emailVal);
+        window.location.href = `mailto:?subject=${subject}&body=${body}`;
       });
     }
+  }
+
+  // --- 9. CARGA DE EJEMPLO PRÁCTICO (/demo-sample-pdf) ---
+  async function loadDemoExample() {
+    const attachStatus = document.getElementById("attachment-status-text");
+    const verbalInput = document.getElementById("input-verbal-statement");
+    try {
+      const resp = await fetch("/demo-sample-pdf");
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const pdfBlob = await resp.blob();
+      state.currentPdfBlob = pdfBlob;
+      state.currentPdfName = "Ejemplo_Caso_Laboral.pdf";
+      if (verbalInput && !verbalInput.value.trim()) {
+        verbalInput.value =
+          "Mi abogado me dijo que ya pidió sentencia la semana pasada y me pide transferirle $45.000 para gastos y firmar un convenio de honorarios del 30%.";
+      }
+      if (attachStatus) {
+        attachStatus.textContent = "Archivo de ejemplo cargado: Ejemplo_Caso_Laboral.pdf";
+      }
+      await runUnifiedConsultation();
+    } catch (err) {
+      console.error("Error cargando ejemplo:", err);
+    }
+  }
+
+  // --- INICIALIZACIÓN DOM ---
+  document.addEventListener("DOMContentLoaded", () => {
+    initThemeToggle();
+    initServiceWorker();
+    initUserAccess();
+    initUnifiedInputControls();
+    initResponseActionButtons();
+
+    document.getElementById("btn-demo-pdf")?.addEventListener("click", loadDemoExample);
+    document.getElementById("btn-run-full-analysis")?.addEventListener("click", runUnifiedConsultation);
+    document.getElementById("btn-download-pdf")?.addEventListener("click", downloadAuditedPdf);
   });
 })();

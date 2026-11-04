@@ -9,7 +9,7 @@
  *    /repository-consult, /cron-07am, /health) garantizando Zero-Storage de expedientes en caché.
  */
 
-const CACHE_NAME = "dr-h-argentina-pwa-v1.4.0";
+const CACHE_NAME = "dr-h-argentina-pwa-v1.5.0-admin";
 const APP_SHELL_ASSETS = [
   "/",
   "/index.html",
@@ -18,14 +18,19 @@ const APP_SHELL_ASSETS = [
 ];
 
 const API_PATHS_NEVER_CACHE = [
+  "/auth",
   "/pre-quote",
   "/analyze-expediente",
   "/download-report-pdf",
+  "/demo-sample-pdf",
   "/emergency-scan",
   "/repository-consult",
   "/cron-07am",
   "/health",
-  "/queue-status"
+  "/queue-status",
+  "/docs",
+  "/redoc",
+  "/openapi.json"
 ];
 
 self.addEventListener("install", (event) => {

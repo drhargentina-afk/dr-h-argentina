@@ -31,6 +31,7 @@ from ingestion_07am import (
     OfficialGazetteCollector,
 )
 from main import app, orchestrator
+from tests.admin_auth_helper import get_admin_headers
 
 _mod_fam = importlib.import_module("agents_fueros.02_familia.repo_familia")
 _mod_lab = importlib.import_module("agents_fueros.03_laboral.repo_laboral")
@@ -191,8 +192,11 @@ class TestPaso4IngestionAndGamuzaBridge(unittest.TestCase):
         """Ejecuta /cron-07am con lote por defecto y verifica /health y alertas administrativas."""
         client = TestClient(app)
 
-        # 1. Ejecutar /cron-07am sin payload explícito (toma el lote oficial argentino de las 07:00 AM)
-        resp_cron = client.post("/cron-07am")
+        # 1. Ejecutar /cron-07am: sin cabeceras da 401, con admin token toma el lote oficial
+        resp_unauth = client.post("/cron-07am")
+        self.assertEqual(resp_unauth.status_code, 401)
+
+        resp_cron = client.post("/cron-07am", headers=get_admin_headers(client))
         self.assertEqual(resp_cron.status_code, 200)
         signals = resp_cron.json()
         self.assertEqual(len(signals), 6)

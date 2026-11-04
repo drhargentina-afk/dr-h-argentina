@@ -29,6 +29,7 @@ from core.models import (
 from core.privacy_anonymizer import PrivacyAnonymizer
 from core.zero_storage_drive import ZeroStorageDriveManager
 from main import app
+from tests.admin_auth_helper import get_admin_headers
 
 
 def build_synthetic_expediente_pdf() -> bytes:
@@ -150,10 +151,20 @@ class TestPaso1DrHCore(unittest.TestCase):
         client = TestClient(app)
         pdf_bytes = build_synthetic_expediente_pdf()
 
+        # Verificar que el acceso no autenticado sea bloqueado (401)
+        resp_unauth = client.post(
+            "/pre-quote",
+            files={"file": ("expediente_pba.pdf", pdf_bytes, "application/pdf")},
+        )
+        self.assertEqual(resp_unauth.status_code, 401)
+
+        admin_headers = get_admin_headers(client)
+
         # 1. Endpoint /pre-quote
         resp_quote = client.post(
             "/pre-quote",
             files={"file": ("expediente_pba.pdf", pdf_bytes, "application/pdf")},
+            headers=admin_headers,
         )
         self.assertEqual(resp_quote.status_code, 200)
         quote_data = resp_quote.json()
@@ -170,6 +181,7 @@ class TestPaso1DrHCore(unittest.TestCase):
                 "claimed_lawyer_fee_pct": "30.00",
                 "upfront_cost_requested_ars": "50000.00",
             },
+            headers=admin_headers,
         )
         self.assertEqual(resp_analyze.status_code, 200)
         report = resp_analyze.json()
@@ -190,6 +202,7 @@ class TestPaso1DrHCore(unittest.TestCase):
                 "province_jurisdiction": "PJN_NACION_CABA",
                 "user_context_note": "Me piden firmar esto ahora en una oficina.",
             },
+            headers=admin_headers,
         )
         self.assertEqual(resp_scan.status_code, 200)
         scan_data = resp_scan.json()
@@ -203,6 +216,7 @@ class TestPaso1DrHCore(unittest.TestCase):
                 "query": "Indemnización por despido sin causa y beneficio de gratuidad Ley 20.744",
                 "province_jurisdiction": "CORDOBA",
             },
+            headers=admin_headers,
         )
         self.assertEqual(resp_repo.status_code, 200)
         repo_data = resp_repo.json()
@@ -222,6 +236,7 @@ class TestPaso1DrHCore(unittest.TestCase):
                     "modifies_or_repeals": ["Decreto 105/2021"],
                 }
             ],
+            headers=admin_headers,
         )
         self.assertEqual(resp_cron.status_code, 200)
         signals = resp_cron.json()

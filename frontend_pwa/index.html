@@ -389,32 +389,32 @@
   </header>
 
   <main class="main-container" role="main">
-    <!-- 1. ACCESO DE USUARIO -->
+    <!-- 1. ACCESO PRIVADO EXCLUSIVO DEL ADMINISTRADOR -->
     <section id="login-section" class="panel-card login-card" aria-labelledby="title-login">
       <div class="panel-header">
         <div>
-          <h2 id="title-login">Ingreso de Usuario</h2>
+          <h2 id="title-login">Acceso de Administrador</h2>
           <p style="font-size:0.88rem;color:var(--text-secondary);">
-            Ingresá tu usuario y contraseña para habilitar tu consulta privada.
+            Dr. H Argentina está en modo privado. El ingreso está habilitado solo para el administrador.
           </p>
         </div>
       </div>
 
-      <form id="login-form" style="display:flex;flex-direction:column;gap:0.9rem;">
+      <form id="login-form" style="display:flex;flex-direction:column;gap:0.9rem;" novalidate>
         <div class="form-field">
-          <label for="login-username">Usuario o Correo Electrónico:</label>
-          <input id="login-username" type="text" autocomplete="username" placeholder="Ej.: maria.gonzalez" required>
+          <label for="login-username">Usuario de Administrador:</label>
+          <input id="login-username" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required>
         </div>
 
         <div class="form-field">
-          <label for="login-password">Contraseña:</label>
-          <input id="login-password" type="password" autocomplete="current-password" placeholder="••••••••" required>
+          <label for="login-password">Contraseña de Administrador:</label>
+          <input id="login-password" name="password" type="password" autocomplete="current-password" required>
         </div>
 
-        <div id="login-feedback" class="state-banner hidden" role="alert"></div>
+        <div id="login-feedback" class="state-banner hidden" role="alert" aria-live="assertive"></div>
 
         <button id="btn-login" type="submit" class="btn btn-primary btn-large">
-          Ingresar a Dr. H
+          Ingresar
         </button>
       </form>
     </section>

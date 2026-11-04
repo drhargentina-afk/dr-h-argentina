@@ -1,5 +1,22 @@
+# Credenciales y entorno privado del servidor (NUNCA versionar)
 .env
+.env.*
+!.env.example
+
+# Entorno virtual y cachés de Python
 .venv/
+venv/
 __pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Informes y documentos generados (datos privados de consultas: NUNCA versionar)
+user_google_drive_outbox/
 *.pdf
 *.txt
+!requirements.txt
+
+# Bases de datos locales
+*.db
+*.sqlite3

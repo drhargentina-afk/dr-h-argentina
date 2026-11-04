@@ -26,6 +26,14 @@ from core.models import (
     SubscriptionTier,
     UserRole,
 )
+from core.admin_auth import (
+    AdminAuthError,
+    AdminLockoutError,
+    AdminLoginRequest,
+    AdminSessionManager,
+    AdminSessionResponse,
+    AdminSessionStatus,
+)
 from core.config import ApiKeyLeakGuardMiddleware, ServerSecurityConfig
 from core.privacy_anonymizer import PrivacyAnonymizer, SessionAnonymizerMap
 from core.rate_limiter_queue import (
@@ -37,6 +45,12 @@ from core.zero_storage_drive import VolatileExpedienteSession, ZeroStorageDriveM
 from core.agente000_orchestrator import Agente000Orchestrator
 
 __all__ = [
+    "AdminAuthError",
+    "AdminLockoutError",
+    "AdminLoginRequest",
+    "AdminSessionManager",
+    "AdminSessionResponse",
+    "AdminSessionStatus",
     "Agente000Orchestrator",
     "ApiKeyLeakGuardMiddleware",
     "AuditReviewResult",

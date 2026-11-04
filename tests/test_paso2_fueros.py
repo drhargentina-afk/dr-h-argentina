@@ -28,7 +28,8 @@ from agents_fueros import (
     RepoSeguridadSocial,
 )
 from core.models import CaseContext, FojaPageContent, FueroKey, ProvinceKey, UserRole
-from main import app, orchestrator
+from main import app
+from tests.admin_auth_helper import get_admin_headers, orchestrator
 
 
 class TestPaso2FuerosAndCalculators(unittest.TestCase):
@@ -198,12 +199,24 @@ class TestPaso2FuerosAndCalculators(unittest.TestCase):
 
         # Endpoint /repository-consult integrado con FuerosRouter
         client = TestClient(app)
+        # 401 si no está autenticado como admin
+        resp_unauth = client.post(
+            "/repository-consult",
+            json={
+                "query": "Me llaman de un estudio de cobranza por una deuda vieja de tarjeta de crédito y amenazan con embargar.",
+                "province_jurisdiction": "PJN_NACION_CABA",
+            },
+        )
+        self.assertEqual(resp_unauth.status_code, 401)
+
+        # 200 con cabecera de admin
         resp = client.post(
             "/repository-consult",
             json={
                 "query": "Me llaman de un estudio de cobranza por una deuda vieja de tarjeta de crédito y amenazan con embargar.",
                 "province_jurisdiction": "PJN_NACION_CABA",
             },
+            headers=get_admin_headers(client),
         )
         self.assertEqual(resp.status_code, 200)
         data = resp.json()

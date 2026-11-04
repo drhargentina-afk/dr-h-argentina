@@ -1,25 +1,49 @@
-"""Entrypoint FastAPI de Dr. H Argentina (Nodo Capa-País 'AR').
+"""Entrypoint FastAPI de Dr. H Argentina (Nodo Capa-País 'AR') — MODO PRIVADO EXCLUSIVO ADMINISTRADOR.
 
-Expone los 5 endpoints principales conectados con Agente000Orchestrator:
-1. POST /pre-quote          -> Cotizador e higiene instantánea PyMuPDF en RAM (<2s, sin gastar IA).
-2. POST /analyze-expediente -> Ciclo completo Ida y Vuelta de Agente000 (Triage -> Fuero -> Auditoría -> Escudo Legal -> Drive + Wipe RAM).
-3. POST /emergency-scan     -> Escáner de primera urgencia "¡No Firmes Todavía!" para cédulas, actas y acuerdos.
-4. POST /repository-consult -> Consultor del repositorio normativo argentino con control de vigencia temporal.
-5. POST /cron-07am          -> Ingesta matutina del Boletín Oficial (07:00 AM) y emisión de señales a Proyecto Gamuza (Geopolítica + Bolsa).
+Control de acceso:
+- `/docs`, `/redoc` y `/openapi.json` deshabilitados para el público; solo responden con credenciales
+  de Administrador (HTTP Basic con `ADMIN_USER` / `ADMIN_PASSWORD`).
+- `POST /auth/login`  -> valida `ADMIN_USER` / `ADMIN_PASSWORD` y emite un token Bearer de Administrador.
+- `GET  /auth/me`     -> verifica el token vigente.
+- `POST /auth/logout` -> revoca el token.
+- Todos los motores exigen `Authorization: Bearer <token de Administrador>`:
+  /pre-quote, /analyze-expediente, /emergency-scan, /repository-consult, /download-report-pdf,
+  /demo-sample-pdf, /cron-07am y /queue-status.
+- `/health` permanece abierto (sin datos de usuarios) para los chequeos de disponibilidad del hosting.
+
+Motores conectados con `Agente000Orchestrator` (sin cambios funcionales):
+1. POST /pre-quote          -> Cotizador e higiene instantánea PyMuPDF en RAM.
+2. POST /analyze-expediente -> Ciclo completo Ida y Vuelta de Agente000.
+3. POST /emergency-scan     -> Escáner "¡No Firmes Todavía!".
+4. POST /repository-consult -> Consultor del repositorio normativo argentino.
+5. POST /cron-07am          -> Ingesta matutina del Boletín Oficial y señales a Proyecto Gamuza.
 """
 from __future__ import annotations
 
+import base64
+import binascii
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Annotated
 
 import fitz  # PyMuPDF
-from fastapi import Body, FastAPI, File, Form, HTTPException, Response, UploadFile, status
+from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
+from fastapi.openapi.utils import get_openapi
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 
 from auditor_revision.report_builder import CitizenReportBuilder
+from core.admin_auth import (
+    AdminAuthError,
+    AdminLockoutError,
+    AdminLoginRequest,
+    AdminSessionManager,
+    AdminSessionResponse,
+    AdminSessionStatus,
+)
 from core.agente000_orchestrator import Agente000Orchestrator
 from core.config import ApiKeyLeakGuardMiddleware
 from core.models import (
@@ -37,27 +61,106 @@ from core.models import (
 from core.rate_limiter_queue import QueueStatusSnapshot
 from ingestion_07am.system_watchdog import SystemHealthReport
 
+# docs_url / redoc_url / openapi_url en None: FastAPI no publica la documentación automáticamente.
 app = FastAPI(
-    title="Dr. H Argentina — Sistema Multi-Agente de Inteligencia y Auditoría Jurídica (Nodo AR)",
-    description=(
-        "Plataforma de lectura, higiene y auditoría trazable de expedientes judiciales argentinos "
-        "con arquitectura Zero-Storage en RAM, Escudo Legal ciudadano y puente regulatorio hacia Proyecto Gamuza."
-    ),
+    title="Dr. H Argentina — Panel Privado de Administración",
+    description="Plataforma de análisis jurídico argentino en modo privado exclusivo para el Administrador.",
     version="1.4.0-AR-PWA",
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
 )
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 orchestrator = Agente000Orchestrator()
+admin_sessions = AdminSessionManager(
+    admin_user=orchestrator.security_config.admin_user,
+    admin_password=orchestrator.security_config.admin_password,
+    ttl_hours=orchestrator.security_config.admin_session_ttl_hours,
+)
 app.add_middleware(ApiKeyLeakGuardMiddleware, config=orchestrator.security_config)
 
 FRONTEND_PWA_DIR = Path(__file__).resolve().parent / "frontend_pwa"
+
+_bearer_scheme = HTTPBearer(auto_error=False, description="Token de sesión del Administrador (POST /auth/login).")
+
+
+def _client_origin(request: Request) -> str:
+    """Origen del cliente para el control de fuerza bruta.
+
+    Se usa la IP de la conexión (no `X-Forwarded-For`, que el cliente puede falsificar). Detrás de un
+    proxy, ejecutar uvicorn con `--proxy-headers --forwarded-allow-ips=<IP del proxy>`.
+    """
+    if request.client and request.client.host:
+        return request.client.host
+    return "unknown"
+
+
+def require_admin_token(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer_scheme)],
+) -> AdminSessionStatus:
+    """Dependencia de candado: solo deja pasar peticiones con token Bearer válido del Administrador."""
+    token = credentials.credentials if credentials is not None else None
+    try:
+        return admin_sessions.validate_token(token)
+    except AdminAuthError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+
+
+AdminGuard = Annotated[AdminSessionStatus, Depends(require_admin_token)]
+
+
+def _require_admin_basic_auth(request: Request) -> None:
+    """Exige credenciales HTTP Basic del Administrador para el panel técnico (/docs, /redoc, /openapi.json)."""
+    challenge = {"WWW-Authenticate": 'Basic realm="Dr. H - Panel Tecnico Privado", charset="UTF-8"'}
+    auth_header = request.headers.get("Authorization", "").strip()
+    if not auth_header.lower().startswith("basic "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Acceso técnico restringido al Administrador.",
+            headers=challenge,
+        )
+    try:
+        decoded = base64.b64decode(auth_header[6:].strip(), validate=True).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Cabecera de autenticación mal formada.",
+            headers=challenge,
+        ) from exc
+
+    username, separator, password = decoded.partition(":")
+    if not separator:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Cabecera de autenticación mal formada.",
+            headers=challenge,
+        )
+    try:
+        admin_sessions.authenticate(username, password, origin=_client_origin(request))
+    except AdminLockoutError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=str(exc),
+            headers={"Retry-After": str(exc.retry_after_seconds)},
+        ) from exc
+    except AdminAuthError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+            headers=challenge,
+        ) from exc
 
 
 def _parse_optional_decimal(raw_val: str | None, field_name: str) -> Decimal | None:
@@ -79,24 +182,92 @@ def _parse_optional_decimal(raw_val: str | None, field_name: str) -> Decimal | N
     return val
 
 
+# =========================================================================
+# PANEL TÉCNICO PRIVADO (/docs, /redoc, /openapi.json) — SOLO ADMINISTRADOR
+# =========================================================================
+
+@app.get("/openapi.json", include_in_schema=False)
+async def private_openapi(request: Request) -> JSONResponse:
+    """Esquema OpenAPI disponible únicamente con credenciales del Administrador."""
+    _require_admin_basic_auth(request)
+    return JSONResponse(get_openapi(title=app.title, version=app.version, routes=app.routes))
+
+
+@app.get("/docs", include_in_schema=False)
+async def private_swagger_docs(request: Request) -> HTMLResponse:
+    """Swagger UI disponible únicamente con credenciales del Administrador."""
+    _require_admin_basic_auth(request)
+    return get_swagger_ui_html(openapi_url="/openapi.json", title=f"{app.title} - Docs")
+
+
+@app.get("/redoc", include_in_schema=False)
+async def private_redoc(request: Request) -> HTMLResponse:
+    """ReDoc disponible únicamente con credenciales del Administrador."""
+    _require_admin_basic_auth(request)
+    return get_redoc_html(openapi_url="/openapi.json", title=f"{app.title} - ReDoc")
+
+
+# =========================================================================
+# AUTENTICACIÓN DEL ADMINISTRADOR
+# =========================================================================
+
+@app.post("/auth/login", response_model=AdminSessionResponse, tags=["Acceso Administrador"])
+async def auth_login_endpoint(credentials: AdminLoginRequest, request: Request) -> AdminSessionResponse:
+    """Valida ADMIN_USER / ADMIN_PASSWORD y emite un token Bearer de Administrador."""
+    try:
+        return admin_sessions.login(credentials, origin=_client_origin(request))
+    except AdminLockoutError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=str(exc),
+            headers={"Retry-After": str(exc.retry_after_seconds)},
+        ) from exc
+    except AdminAuthError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+
+
+@app.get("/auth/me", response_model=AdminSessionStatus, tags=["Acceso Administrador"])
+async def auth_me_endpoint(session: AdminGuard) -> AdminSessionStatus:
+    """Confirma que el token Bearer del Administrador sigue vigente."""
+    return session
+
+
+@app.post("/auth/logout", status_code=status.HTTP_204_NO_CONTENT, tags=["Acceso Administrador"])
+async def auth_logout_endpoint(
+    _session: AdminGuard,
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer_scheme)],
+) -> Response:
+    """Revoca el token Bearer del Administrador."""
+    admin_sessions.revoke_token(credentials.credentials if credentials is not None else None)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# =========================================================================
+# SISTEMA
+# =========================================================================
+
 @app.get("/health", response_model=SystemHealthReport, tags=["Sistema"])
 async def health_check() -> SystemHealthReport:
-    """Ejecuta el Healthcheck profundo de Agente000, los 7 fueros, Auditor, RAM Zero-Storage y estado 07:00 AM."""
+    """Healthcheck de disponibilidad (abierto para el hosting; no expone datos de consultas)."""
     return orchestrator.system_watchdog.build_health_report(orchestrator)
 
 
 @app.get("/queue-status", response_model=QueueStatusSnapshot, tags=["Sistema"])
-async def queue_status_endpoint() -> QueueStatusSnapshot:
-    """Devuelve el estado de la cola gratuita de Google AI Studio y el contador de enfriamientos HTTP 429."""
+async def queue_status_endpoint(_session: AdminGuard) -> QueueStatusSnapshot:
+    """Estado de la cola de Google AI Studio y contador de enfriamientos HTTP 429 (solo Administrador)."""
     return orchestrator.rate_limiter.get_status_snapshot()
 
+
+# =========================================================================
+# MOTORES DE CONSULTA (CANDADO: TOKEN DE ADMINISTRADOR OBLIGATORIO)
+# =========================================================================
 
 @app.post(
     "/download-report-pdf",
     status_code=status.HTTP_200_OK,
     tags=["2. Flujo Completo Agente000 (Ida y Vuelta)"],
 )
-async def download_report_pdf_endpoint(report: FinalCitizenReport) -> Response:
+async def download_report_pdf_endpoint(report: FinalCitizenReport, _session: AdminGuard) -> Response:
     """Genera y descarga en memoria RAM el PDF institucional auditado sin escribir en el disco del servidor."""
     try:
         pdf_bytes = CitizenReportBuilder.build_pdf_in_ram(report)
@@ -116,8 +287,8 @@ async def download_report_pdf_endpoint(report: FinalCitizenReport) -> Response:
 
 
 @app.get("/demo-sample-pdf", tags=["1. Pre-Cotizador e Higiene Zero-Storage"])
-async def demo_sample_pdf_endpoint() -> Response:
-    """Genera en RAM un expediente sintético multipágina (SCBA Laboral) para pruebas instantáneas en la PWA."""
+async def demo_sample_pdf_endpoint(_session: AdminGuard) -> Response:
+    """Genera en RAM un expediente sintético multipágina (SCBA Laboral) para pruebas del Administrador."""
     doc = fitz.open()
     try:
         p1 = doc.new_page()
@@ -158,7 +329,8 @@ async def demo_sample_pdf_endpoint() -> Response:
     tags=["1. Pre-Cotizador e Higiene Zero-Storage"],
 )
 async def pre_quote_endpoint(
-    file: Annotated[UploadFile, File(description="Archivo PDF del expediente desde el Google Drive del usuario.")],
+    file: Annotated[UploadFile, File(description="Archivo PDF del expediente.")],
+    _session: AdminGuard,
 ) -> PreQuoteResponse:
     """Cuenta páginas, filtra hojas basura/repetidas con PyMuPDF en RAM y cotiza el abono sin gastar tokens de IA."""
     try:
@@ -184,6 +356,7 @@ async def pre_quote_endpoint(
 )
 async def analyze_expediente_endpoint(
     file: Annotated[UploadFile, File(description="Archivo PDF del expediente judicial.")],
+    _session: AdminGuard,
     user_verbal_statement: Annotated[
         str,
         Form(description="Relato del ciudadano: '¿Qué te dijo tu abogado o cuál es tu duda principal?'"),
@@ -235,7 +408,7 @@ async def analyze_expediente_endpoint(
     status_code=status.HTTP_200_OK,
     tags=["3. Modo Urgencia '¡No Firmes Todavía!'"],
 )
-async def emergency_scan_endpoint(request: EmergencyScanRequest) -> EmergencyScanResponse:
+async def emergency_scan_endpoint(request: EmergencyScanRequest, _session: AdminGuard) -> EmergencyScanResponse:
     """Detecta al instante cláusulas abusivas, desistimientos, renuncias o plazos urgentes en un papel o cédula."""
     try:
         return orchestrator.run_emergency_scan(request)
@@ -254,7 +427,10 @@ async def emergency_scan_endpoint(request: EmergencyScanRequest) -> EmergencySca
     status_code=status.HTTP_200_OK,
     tags=["4. Consultor de Repositorios Normativos"],
 )
-async def repository_consult_endpoint(request: RepositoryConsultRequest) -> RepositoryConsultResponse:
+async def repository_consult_endpoint(
+    request: RepositoryConsultRequest,
+    _session: AdminGuard,
+) -> RepositoryConsultResponse:
     """Consulta las leyes argentinas vigentes y reglas procesales provinciales con control de vigencia temporal."""
     try:
         return orchestrator.consult_normative_repository(request)
@@ -274,6 +450,7 @@ async def repository_consult_endpoint(request: RepositoryConsultRequest) -> Repo
     tags=["5. Ingesta 07:00 AM y Puente a Proyecto Gamuza (Bolsa y Acciones)"],
 )
 async def cron_07am_endpoint(
+    _session: AdminGuard,
     norms: Annotated[
         list[BoletinOficialNormInput] | None,
         Body(description="Lista opcional de normas (si se omite, colecta el lote oficial argentino de las 07:00 AM)."),
@@ -295,12 +472,14 @@ async def cron_07am_endpoint(
 
 
 # =========================================================================
-# SERVIDOR ESTÁTICO DE LA INTERFAZ PWA CIUDADANA (frontend_pwa/)
+# SERVIDOR ESTÁTICO DE LA INTERFAZ PWA (frontend_pwa/)
+# La pantalla es pública, pero sin token de Administrador solo muestra el login
+# y ningún motor responde.
 # =========================================================================
 
 @app.get("/", include_in_schema=False)
 async def serve_pwa_index() -> FileResponse:
-    """Sirve el panel visual principal de la PWA de Dr. H Argentina."""
+    """Sirve la pantalla principal de la PWA (login de Administrador)."""
     return FileResponse(FRONTEND_PWA_DIR / "index.html", media_type="text/html")
 
 

@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient
 from core.config import ServerSecurityConfig
 from core.rate_limiter_queue import RateLimitExceededError, RateLimitQueueHandler
 from main import FRONTEND_PWA_DIR, app
+from tests.admin_auth_helper import admin_credentials, get_admin_headers
 
 
 class TestPaso5FrontendPwaAndRateLimiter(unittest.TestCase):
@@ -112,12 +113,14 @@ class TestPaso5FrontendPwaAndRateLimiter(unittest.TestCase):
         # Si por accidente una consulta o error intentara devolver la clave en el cuerpo HTTP,
         # el middleware ApiKeyLeakGuardMiddleware la redacta automáticamente antes de llegar al cliente.
         client = TestClient(app)
+        admin_headers = get_admin_headers(client)
         resp = client.post(
             "/repository-consult",
             json={
                 "query": f"Consulta sobre indemnización laboral con texto {raw_secret}",
                 "province_jurisdiction": "PJN_NACION_CABA",
             },
+            headers=admin_headers,
         )
         self.assertEqual(resp.status_code, 200)
         self.assertNotIn(raw_secret, resp.text)
@@ -162,9 +165,10 @@ class TestPaso5FrontendPwaAndRateLimiter(unittest.TestCase):
     def test_end_to_end_demo_pdf_analyze_and_pdf_download(self) -> None:
         """Prueba el circuito completo de la PWA: obtener PDF demo -> analizar con Agente000 -> descargar PDF auditado."""
         client = TestClient(app)
+        admin_headers = get_admin_headers(client)
 
         # 1. Descargar PDF de prueba desde /demo-sample-pdf
-        resp_demo = client.get("/demo-sample-pdf")
+        resp_demo = client.get("/demo-sample-pdf", headers=admin_headers)
         self.assertEqual(resp_demo.status_code, 200)
         self.assertTrue(resp_demo.content.startswith(b"%PDF-"))
 
@@ -177,13 +181,14 @@ class TestPaso5FrontendPwaAndRateLimiter(unittest.TestCase):
                 "claimed_lawyer_fee_pct": "30.00",
                 "upfront_cost_requested_ars": "45000.00",
             },
+            headers=admin_headers,
         )
         self.assertEqual(resp_analyze.status_code, 200)
         final_report_json = resp_analyze.json()
         self.assertTrue(final_report_json["do_not_sign_yet_alert"])
 
         # 3. Descargar el Informe PDF Auditado desde /download-report-pdf
-        resp_pdf = client.post("/download-report-pdf", json=final_report_json)
+        resp_pdf = client.post("/download-report-pdf", json=final_report_json, headers=admin_headers)
         self.assertEqual(resp_pdf.status_code, 200)
         self.assertEqual(resp_pdf.headers.get("content-type"), "application/pdf")
         self.assertTrue(resp_pdf.content.startswith(b"%PDF-"))
@@ -197,11 +202,64 @@ class TestPaso5FrontendPwaAndRateLimiter(unittest.TestCase):
             doc.close()
 
         # 4. Verificar /queue-status
-        resp_queue = client.get("/queue-status")
+        resp_queue = client.get("/queue-status", headers=admin_headers)
         self.assertEqual(resp_queue.status_code, 200)
         q_data = resp_queue.json()
         self.assertEqual(q_data["tier_mode"], "GOOGLE_AI_STUDIO_FREE_TIER_GUARD")
         self.assertGreaterEqual(q_data["total_requests_processed"], 1)
+
+    def test_admin_auth_and_docs_lockdown(self) -> None:
+        """Verifica cierre total de /docs público y funcionamiento del login y token de administrador."""
+        client = TestClient(app)
+        admin_user, admin_pass = admin_credentials()
+
+        # 1. /docs, /redoc y /openapi.json deben rechazar acceso no autenticado (401)
+        for doc_path in ("/docs", "/redoc", "/openapi.json"):
+            resp_doc_unauth = client.get(doc_path)
+            self.assertEqual(
+                resp_doc_unauth.status_code,
+                401,
+                f"El endpoint {doc_path} no debe ser público",
+            )
+            self.assertIn("WWW-Authenticate", resp_doc_unauth.headers)
+
+        # 2. Con credenciales Basic correctas del Admin, /docs y /openapi.json responden 200
+        import base64
+        basic_b64 = base64.b64encode(f"{admin_user}:{admin_pass}".encode("utf-8")).decode("utf-8")
+        basic_headers = {"Authorization": f"Basic {basic_b64}"}
+
+        resp_openapi = client.get("/openapi.json", headers=basic_headers)
+        self.assertEqual(resp_openapi.status_code, 200)
+        self.assertEqual(resp_openapi.json()["info"]["title"], "Dr. H Argentina — Panel Privado de Administración")
+
+        resp_docs = client.get("/docs", headers=basic_headers)
+        self.assertEqual(resp_docs.status_code, 200)
+        self.assertIn("swagger-ui", resp_docs.text)
+
+        # 3. Login con credenciales incorrectas debe fallar con 401
+        resp_bad_login = client.post("/auth/login", json={"username": admin_user, "password": "WrongPassword123!"})
+        self.assertEqual(resp_bad_login.status_code, 401)
+
+        # 4. Login con credenciales correctas emite token Bearer
+        resp_good_login = client.post("/auth/login", json={"username": admin_user, "password": admin_pass})
+        self.assertEqual(resp_good_login.status_code, 200)
+        login_data = resp_good_login.json()
+        self.assertIn("access_token", login_data)
+        token = login_data["access_token"]
+        bearer_headers = {"Authorization": f"Bearer {token}"}
+
+        # 5. /auth/me valida el token
+        resp_me = client.get("/auth/me", headers=bearer_headers)
+        self.assertEqual(resp_me.status_code, 200)
+        self.assertTrue(resp_me.json()["is_admin"])
+
+        # 6. /auth/logout revoca el token
+        resp_logout = client.post("/auth/logout", headers=bearer_headers)
+        self.assertEqual(resp_logout.status_code, 204)
+
+        # Ahora ese token revocado debe fallar con 401
+        resp_after_logout = client.get("/auth/me", headers=bearer_headers)
+        self.assertEqual(resp_after_logout.status_code, 401)
 
 
 if __name__ == "__main__":

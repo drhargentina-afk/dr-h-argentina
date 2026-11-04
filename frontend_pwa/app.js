@@ -1,6 +1,7 @@
 /**
- * Cliente Unificado de Interfaz Ciudadana — Dr. H Argentina
- * Conecta la pantalla limpia de consulta única con los motores del backend sin exponer jerga técnica:
+ * Cliente Unificado de Interfaz — Dr. H Argentina (MODO PRIVADO EXCLUSIVO ADMINISTRADOR)
+ * - POST /auth/login, GET /auth/me, POST /auth/logout (sesión del Administrador)
+ * Todas las llamadas a los motores envían `Authorization: Bearer <token>` mediante `apiFetch`:
  * - POST /pre-quote
  * - POST /analyze-expediente
  * - POST /download-report-pdf
@@ -11,6 +12,9 @@
 
 (function () {
   "use strict";
+
+  const TOKEN_STORAGE_KEY = "drh_admin_token";
+  const LEGACY_STORAGE_KEYS = ["drh_active_user"];
 
   const FUERO_LABELS = {
     AUTO: "Detección automática",
@@ -25,6 +29,7 @@
 
   const state = {
     loggedInUser: null,
+    accessToken: null,
     selectedFuero: "AUTO",
     currentPdfBlob: null,
     currentPdfName: "expediente_consulta.pdf",
@@ -125,7 +130,42 @@
     });
   }
 
-  // --- 3. INGRESO DE USUARIO (LOGIN / LOGOUT) ---
+  // --- 3. ACCESO PRIVADO DEL ADMINISTRADOR (LOGIN / LOGOUT REAL CONTRA EL BACKEND) ---
+  function readStoredToken() {
+    try {
+      LEGACY_STORAGE_KEYS.forEach((key) => sessionStorage.removeItem(key));
+      return sessionStorage.getItem(TOKEN_STORAGE_KEY);
+    } catch (err) {
+      console.warn("No se pudo leer la sesión guardada:", err);
+      return null;
+    }
+  }
+
+  function storeToken(token) {
+    state.accessToken = token;
+    try {
+      if (token) {
+        sessionStorage.setItem(TOKEN_STORAGE_KEY, token);
+      } else {
+        sessionStorage.removeItem(TOKEN_STORAGE_KEY);
+      }
+    } catch (err) {
+      console.warn("No se pudo actualizar la sesión guardada:", err);
+    }
+  }
+
+  function showLoginFeedback(message, kind) {
+    const feedback = document.getElementById("login-feedback");
+    if (!feedback) return;
+    if (!message) {
+      feedback.classList.add("hidden");
+      feedback.textContent = "";
+      return;
+    }
+    feedback.className = kind === "error" ? "state-banner error" : "state-banner";
+    feedback.textContent = message;
+  }
+
   function setLoggedInView(username) {
     state.loggedInUser = username;
     const loginSection = document.getElementById("login-section");
@@ -137,7 +177,7 @@
       if (loginSection) loginSection.classList.add("hidden");
       if (workspace) workspace.classList.remove("hidden");
       if (userBadge) {
-        userBadge.textContent = `Usuario: ${username}`;
+        userBadge.textContent = `Administrador: ${username}`;
         userBadge.classList.remove("hidden");
       }
       if (btnLogout) btnLogout.classList.remove("hidden");
@@ -149,54 +189,120 @@
     }
   }
 
+  function handleSessionExpired(message) {
+    storeToken(null);
+    state.lastFinalReport = null;
+    setLoggedInView(null);
+    showLoginFeedback(message || "Tu sesión de administrador venció. Volvé a ingresar.", "error");
+  }
+
+  /**
+   * fetch autenticado: agrega el token Bearer del Administrador y cierra la sesión ante un 401.
+   */
+  async function apiFetch(path, options = {}) {
+    if (!state.accessToken) {
+      handleSessionExpired("Acceso privado: ingresá como administrador.");
+      throw new Error("Sesión de administrador no iniciada.");
+    }
+    const headers = new Headers(options.headers || {});
+    headers.set("Authorization", `Bearer ${state.accessToken}`);
+    const resp = await fetch(path, { ...options, headers });
+    if (resp.status === 401) {
+      handleSessionExpired("Tu sesión de administrador venció. Volvé a ingresar.");
+      throw new Error("La sesión de administrador venció.");
+    }
+    return resp;
+  }
+
+  async function restoreSession() {
+    const token = readStoredToken();
+    if (!token) {
+      setLoggedInView(null);
+      return;
+    }
+    state.accessToken = token;
+    try {
+      const resp = await fetch("/auth/me", { headers: { Authorization: `Bearer ${token}` } });
+      if (!resp.ok) {
+        storeToken(null);
+        setLoggedInView(null);
+        return;
+      }
+      const data = await resp.json();
+      setLoggedInView(data.username);
+    } catch (err) {
+      console.warn("No se pudo verificar la sesión guardada:", err);
+      storeToken(null);
+      setLoggedInView(null);
+    }
+  }
+
   function initUserAccess() {
     const loginForm = document.getElementById("login-form");
     const userInput = document.getElementById("login-username");
     const passInput = document.getElementById("login-password");
-    const feedback = document.getElementById("login-feedback");
+    const btnLogin = document.getElementById("btn-login");
     const btnLogout = document.getElementById("btn-logout");
 
-    try {
-      const savedUser = sessionStorage.getItem("drh_active_user");
-      if (savedUser) {
-        setLoggedInView(savedUser);
-      }
-    } catch (err) {
-      console.warn("Sesión en memoria:", err);
-    }
+    restoreSession();
 
     if (loginForm) {
-      loginForm.addEventListener("submit", (ev) => {
+      loginForm.addEventListener("submit", async (ev) => {
         ev.preventDefault();
         const username = userInput?.value.trim() || "";
-        const password = passInput?.value.trim() || "";
+        const password = passInput?.value || "";
 
-        if (username.length < 3 || password.length < 4) {
-          if (feedback) {
-            feedback.className = "state-banner error";
-            feedback.classList.remove("hidden");
-            feedback.textContent = "Ingresá un usuario válido (mínimo 3 caracteres) y tu contraseña.";
-          }
+        if (!username || !password) {
+          showLoginFeedback("Ingresá el usuario y la contraseña de administrador.", "error");
           return;
         }
 
-        if (feedback) feedback.classList.add("hidden");
+        showLoginFeedback("Verificando credenciales...", "info");
+        if (btnLogin) btnLogin.disabled = true;
+
         try {
-          sessionStorage.setItem("drh_active_user", username);
+          const resp = await fetch("/auth/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username, password })
+          });
+
+          if (resp.status === 429) {
+            const data = await resp.json().catch(() => ({}));
+            throw new Error(data.detail || "Demasiados intentos fallidos. Esperá unos minutos.");
+          }
+          if (!resp.ok) {
+            throw new Error("Usuario o contraseña de administrador incorrectos.");
+          }
+
+          const data = await resp.json();
+          storeToken(data.access_token);
+          if (passInput) passInput.value = "";
+          showLoginFeedback("", "info");
+          setLoggedInView(data.username);
         } catch (err) {
-          console.warn("No se pudo persistir en sessionStorage:", err);
+          showLoginFeedback(err.message || "No se pudo iniciar sesión.", "error");
+        } finally {
+          if (btnLogin) btnLogin.disabled = false;
         }
-        setLoggedInView(username);
       });
     }
 
     if (btnLogout) {
-      btnLogout.addEventListener("click", () => {
-        try {
-          sessionStorage.removeItem("drh_active_user");
-        } catch (err) {
-          console.warn("Error limpiando sesión:", err);
+      btnLogout.addEventListener("click", async () => {
+        const token = state.accessToken;
+        if (token) {
+          try {
+            await fetch("/auth/logout", {
+              method: "POST",
+              headers: { Authorization: `Bearer ${token}` }
+            });
+          } catch (err) {
+            console.warn("No se pudo revocar la sesión en el servidor:", err);
+          }
         }
+        storeToken(null);
+        state.lastFinalReport = null;
         if (passInput) passInput.value = "";
         setLoggedInView(null);
       });
@@ -244,7 +350,7 @@
           try {
             const formData = new FormData();
             formData.append("file", file, file.name);
-            await fetch("/pre-quote", { method: "POST", body: formData });
+            await apiFetch("/pre-quote", { method: "POST", body: formData });
           } catch (err) {
             console.warn("Pre-lectura silenciosa:", err);
           }
@@ -409,7 +515,7 @@
           verbalText || "Solicito revisión integral del expediente y pasos a seguir."
         );
 
-        const resp = await fetch("/analyze-expediente", {
+        const resp = await apiFetch("/analyze-expediente", {
           method: "POST",
           body: formData
         });
@@ -439,7 +545,7 @@
         }
 
         const [scanResp, repoResp] = await Promise.all([
-          fetch("/emergency-scan", {
+          apiFetch("/emergency-scan", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -448,7 +554,7 @@
               user_context_note: state.urgentPhotoMode ? "Escáner de urgencia cámara" : "Consulta unificada"
             })
           }),
-          fetch("/repository-consult", {
+          apiFetch("/repository-consult", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(consultPayload)
@@ -527,7 +633,7 @@
   async function downloadAuditedPdf() {
     if (!state.lastFinalReport) return;
     try {
-      const resp = await fetch("/download-report-pdf", {
+      const resp = await apiFetch("/download-report-pdf", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(state.lastFinalReport)
@@ -647,7 +753,7 @@
     const attachStatus = document.getElementById("attachment-status-text");
     const verbalInput = document.getElementById("input-verbal-statement");
     try {
-      const resp = await fetch("/demo-sample-pdf");
+      const resp = await apiFetch("/demo-sample-pdf");
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const pdfBlob = await resp.blob();
       state.currentPdfBlob = pdfBlob;

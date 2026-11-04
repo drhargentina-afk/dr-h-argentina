@@ -1,21 +1,30 @@
 """Motor de Configuración Segura y Blindaje de Credenciales en Servidor (`core/config.py`).
 
-Garantiza que la API Key de Google AI Studio (`GOOGLE_AI_STUDIO_API_KEY`) resida exclusivamente
-en la memoria privada del servidor FastAPI:
-1. Carga determinista desde el archivo `.env` del proyecto o variables de entorno del sistema.
-2. Encapsulamiento mediante `SecretStr` de Pydantic para impedir su impresión accidental en logs o tracebacks.
-3. Middleware ASGI (`ApiKeyLeakGuardMiddleware`) que inspecciona cabeceras y cuerpos de salida HTTP,
+Garantiza que las claves y credenciales (`GOOGLE_API_KEY`, `ADMIN_USER`, `ADMIN_PASSWORD`)
+residan exclusivamente en la memoria privada del servidor FastAPI:
+1. Carga determinista desde variables de entorno o archivo `.env` local (excluido de Git).
+2. Encapsulamiento mediante `SecretStr` de Pydantic para impedir su impresión accidental en logs.
+3. Ninguna credencial queda escrita en el código fuente: si `ADMIN_PASSWORD` no está definida,
+   se genera una clave aleatoria criptográficamente segura válida solo para el proceso actual.
+4. Middleware ASGI (`ApiKeyLeakGuardMiddleware`) que inspecciona cabeceras y cuerpos de salida HTTP,
    redactando de inmediato cualquier coincidencia accidental con la clave antes de que llegue al navegador.
 """
 from __future__ import annotations
 
 from decimal import Decimal
+import logging
 import os
 from pathlib import Path
+import secrets
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+_logger = logging.getLogger("dr_h.config")
+
+DEFAULT_ADMIN_USER = "admin"
+MIN_ADMIN_PASSWORD_LENGTH = 12
 
 
 def _parse_dotenv_file(dotenv_path: Path) -> dict[str, str]:
@@ -36,6 +45,27 @@ def _parse_dotenv_file(dotenv_path: Path) -> dict[str, str]:
     return values
 
 
+def _resolve_admin_password(raw_password: str) -> SecretStr:
+    """Devuelve la clave de administrador del entorno o genera una aleatoria segura para el proceso.
+
+    Criterio: si `ADMIN_PASSWORD` está definida debe tener al menos 12 caracteres; si no existe,
+    se genera con `secrets.token_urlsafe(24)` (~192 bits de entropía) y no se persiste en disco.
+    """
+    clean = raw_password.strip()
+    if clean:
+        if len(clean) < MIN_ADMIN_PASSWORD_LENGTH:
+            raise ValueError(
+                f"ADMIN_PASSWORD debe tener al menos {MIN_ADMIN_PASSWORD_LENGTH} caracteres."
+            )
+        return SecretStr(clean)
+
+    _logger.warning(
+        "ADMIN_PASSWORD no está definida: se generó una clave aleatoria temporal para este proceso. "
+        "Definí ADMIN_PASSWORD en el archivo .env o en las variables de entorno del servidor."
+    )
+    return SecretStr(secrets.token_urlsafe(24))
+
+
 class ServerSecurityConfig(BaseModel):
     """Configuración inmutable de servidor para Dr. H Argentina (Nodo AR)."""
 
@@ -45,6 +75,17 @@ class ServerSecurityConfig(BaseModel):
         ...,
         description="API Key privada de Google AI Studio (jamás expuesta al cliente PWA).",
     )
+    admin_user: str = Field(
+        default=DEFAULT_ADMIN_USER,
+        min_length=3,
+        max_length=64,
+        description="Usuario Administrador exclusivo (ADMIN_USER).",
+    )
+    admin_password: SecretStr = Field(
+        ...,
+        description="Contraseña del Administrador (ADMIN_PASSWORD), nunca escrita en el código fuente.",
+    )
+    admin_session_ttl_hours: int = Field(default=12, ge=1, le=168)
     node_country: str = Field(default="AR", min_length=2, max_length=2)
     platform_version: str = Field(default="1.4.0-AR-PWA", min_length=3)
     gemini_model_primary: str = Field(default="gemini-2.5-flash", min_length=3)
@@ -75,8 +116,16 @@ class ServerSecurityConfig(BaseModel):
                 "GOOGLE_API_KEY / GOOGLE_AI_STUDIO_API_KEY inválida o ausente en el entorno (.env)."
             )
 
+        try:
+            ttl_hours = int(_get("ADMIN_SESSION_TTL_HOURS", "12"))
+        except ValueError as exc:
+            raise ValueError("ADMIN_SESSION_TTL_HOURS debe ser un número entero de horas.") from exc
+
         return cls(
             google_ai_studio_api_key=SecretStr(raw_key.strip()),
+            admin_user=_get("ADMIN_USER", DEFAULT_ADMIN_USER).strip(),
+            admin_password=_resolve_admin_password(_get("ADMIN_PASSWORD", "")),
+            admin_session_ttl_hours=ttl_hours,
             node_country=_get("DR_H_NODE_COUNTRY", "AR"),
             platform_version=_get("DR_H_PLATFORM_VERSION", "1.4.0-AR-PWA"),
             gemini_model_primary=_get("GEMINI_MODEL_PRIMARY", "gemini-2.5-flash"),
@@ -86,7 +135,7 @@ class ServerSecurityConfig(BaseModel):
         )
 
     def get_masked_key_fingerprint(self) -> str:
-        """Devuelve una huella enmascarada segura para auditoría interna (ej. 'AQ.A...DgQ')."""
+        """Devuelve una huella enmascarada segura para auditoría interna."""
         secret = self.google_ai_studio_api_key.get_secret_value()
         if len(secret) <= 10:
             return "***REDACTED***"

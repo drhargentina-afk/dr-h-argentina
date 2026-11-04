@@ -14,6 +14,8 @@ import base64
 import binascii
 from decimal import Decimal, InvalidOperation
 import hashlib
+import json
+import logging
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -48,7 +50,11 @@ from core.database import DrHDatabase
 from core.mercadopago_gateway import (
     CreatePreferenceRequest,
     CreatePreferenceResponse,
+    MercadoPagoError,
     MercadoPagoGateway,
+    MercadoPagoStatus,
+    WebhookResult,
+    WebhookSignatureError,
 )
 from core.models import (
     BoletinOficialNormInput,
@@ -64,6 +70,8 @@ from core.models import (
 )
 from core.rate_limiter_queue import QueueStatusSnapshot
 from ingestion_07am.system_watchdog import SystemHealthReport
+
+_main_logger = logging.getLogger("dr_h.main")
 
 app = FastAPI(
     title="Dr. H Argentina — Sistema de Inteligencia y Auditoría Jurídica",
@@ -89,6 +97,8 @@ mp_gateway = MercadoPagoGateway(
     access_token=orchestrator.security_config.mercadopago_access_token.get_secret_value(),
     public_key=orchestrator.security_config.mercadopago_public_key,
     db=db,
+    webhook_secret=orchestrator.security_config.mercadopago_webhook_secret.get_secret_value(),
+    public_base_url=orchestrator.security_config.public_base_url,
 )
 case_tracker = CaseTrackerService(db, orchestrator)
 
@@ -570,7 +580,7 @@ async def add_movement_endpoint(
 
 
 # =========================================================================
-# PASARELA DE PAGOS MERCADO PAGO LOCAL
+# PASARELA DE PAGOS MERCADO PAGO (ARS)
 # =========================================================================
 
 @app.post("/payments/create-preference", response_model=CreatePreferenceResponse, tags=["Pagos Mercado Pago"])
@@ -578,29 +588,74 @@ async def create_preference_endpoint(
     req: CreatePreferenceRequest,
     user: Annotated[UserProfileResponse, Depends(get_current_user)],
 ) -> CreatePreferenceResponse:
-    """Genera una preferencia de pago en Mercado Pago para desbloquear consultas en ARS."""
-    return mp_gateway.create_preference(
-        user_email=user.email,
-        plan_type=req.plan_type,
-        case_id=req.case_id,
-    )
-
-
-@app.post("/payments/webhook", tags=["Pagos Mercado Pago"])
-async def payments_webhook_endpoint(request: Request) -> dict[str, Any]:
-    """Recibe la notificación de pago de Mercado Pago y activa el pase del usuario."""
+    """Genera una preferencia de pago y devuelve el `init_point` del checkout de Mercado Pago."""
     try:
-        data = await request.json()
-    except Exception:
-        data = {}
-    return mp_gateway.process_webhook(data)
+        return mp_gateway.create_preference(
+            user_email=user.email,
+            plan_type=req.plan_type,
+            case_id=req.case_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except MercadoPagoError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+
+@app.post("/payments/webhook", response_model=WebhookResult, tags=["Pagos Mercado Pago"])
+async def payments_webhook_endpoint(request: Request) -> WebhookResult:
+    """Recibe la notificación de Mercado Pago, verifica el pago en la API y acredita si está aprobado.
+
+    Códigos: 200 = procesado/ignorado (MP no reintenta); 401 = firma inválida;
+    502 = fallo consultando a MP (MP reintenta automáticamente).
+    """
+    raw_body = await request.body()
+    body: dict[str, Any] = {}
+    if raw_body.strip():
+        try:
+            parsed_body = json.loads(raw_body)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cuerpo JSON inválido.") from exc
+        if not isinstance(parsed_body, dict):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El cuerpo debe ser un objeto JSON.")
+        body = parsed_body
+
+    try:
+        result = mp_gateway.process_webhook(
+            query_params=dict(request.query_params),
+            body=body,
+            x_signature=request.headers.get("x-signature"),
+            x_request_id=request.headers.get("x-request-id"),
+        )
+    except WebhookSignatureError as exc:
+        _main_logger.warning("Webhook de Mercado Pago rechazado por firma inválida: %s", exc)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+    except MercadoPagoError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+    _main_logger.info(
+        "Webhook MP procesado: status=%s payment_id=%s plan=%s", result.status, result.payment_id, result.plan_type
+    )
+    return result
+
+
+@app.get("/payments/status", response_model=MercadoPagoStatus, tags=["Pagos Mercado Pago"])
+async def payments_status_endpoint(
+    _user: Annotated[UserProfileResponse, Depends(get_current_user)],
+) -> MercadoPagoStatus:
+    """Diagnóstico de la pasarela: permite confirmar que Render inyectó MP_ACCESS_TOKEN / MP_PUBLIC_KEY."""
+    return mp_gateway.status_snapshot()
 
 
 @app.post("/payments/mock-activate", tags=["Pagos Mercado Pago"])
 async def mock_activate_endpoint(
     user: Annotated[UserProfileResponse, Depends(get_current_user)],
 ) -> dict[str, Any]:
-    """Habilita el pase completo para el usuario actual en entorno local o de pruebas."""
+    """Activa el pase SOLO en modo MOCK (local/tests). Deshabilitado cuando hay credenciales reales de MP."""
+    if mp_gateway.is_live:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="La activación simulada no está disponible con la pasarela de Mercado Pago activa.",
+        )
     db.set_user_paid_pass(user.email, True)
     return {"status": "SUCCESS", "message": f"Pase completo activado para {user.email}"}
 

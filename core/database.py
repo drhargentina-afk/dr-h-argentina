@@ -96,6 +96,18 @@ class DrHDatabase:
                     FOREIGN KEY (case_id) REFERENCES user_cases(case_id) ON DELETE CASCADE
                 );
                 CREATE INDEX IF NOT EXISTS idx_case_movements_case ON case_movements(case_id);
+
+                CREATE TABLE IF NOT EXISTS payments (
+                    payment_id TEXT PRIMARY KEY,
+                    user_email TEXT NOT NULL,
+                    plan_type TEXT NOT NULL,
+                    amount_ars TEXT NOT NULL,
+                    currency_id TEXT NOT NULL,
+                    mp_status TEXT NOT NULL,
+                    benefit_applied INTEGER NOT NULL DEFAULT 0,
+                    created_at_iso TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_payments_email ON payments(user_email);
                 """
             )
 
@@ -108,6 +120,7 @@ class DrHDatabase:
                 DELETE FROM user_cases;
                 DELETE FROM user_sessions;
                 DELETE FROM document_fingerprints;
+                DELETE FROM payments;
                 DELETE FROM users;
                 """
             )
@@ -183,6 +196,79 @@ class DrHDatabase:
                 """,
                 (1 if has_paid else 0, now, clean_email),
             )
+
+    # --- PAGOS MERCADO PAGO (IDEMPOTENTES) ---
+    def apply_approved_payment(
+        self,
+        *,
+        payment_id: str,
+        user_email: str,
+        plan_type: Literal["PASE_COMPLETO", "CONSULTA_INDIVIDUAL"],
+        amount_ars: str,
+        currency_id: str,
+    ) -> Literal["ACTIVATED", "ALREADY_PROCESSED", "USER_NOT_FOUND"]:
+        """Registra un pago aprobado y aplica el beneficio una sola vez, en una única transacción.
+
+        Criterio: `payment_id` es clave primaria, por lo que los reintentos de Mercado Pago
+        (payment.created / payment.updated / reenvíos) nunca acreditan dos veces.
+        - PASE_COMPLETO: activa `has_paid_pass = 1`.
+        - CONSULTA_INDIVIDUAL: devuelve 1 crédito (`free_consultations_used - 1`, mínimo 0).
+        """
+        clean_pid = str(payment_id).strip()
+        clean_email = user_email.strip().lower()
+        if not clean_pid:
+            raise ValueError("payment_id vacío: no se puede registrar el pago.")
+        if plan_type not in ("PASE_COMPLETO", "CONSULTA_INDIVIDUAL"):
+            raise ValueError(f"plan_type desconocido: {plan_type}")
+
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as conn:
+            # Lock de escritura inmediato: serializa webhooks concurrentes del mismo pago.
+            conn.execute("BEGIN IMMEDIATE")
+            existing = conn.execute(
+                "SELECT benefit_applied FROM payments WHERE payment_id = ?",
+                (clean_pid,),
+            ).fetchone()
+            if existing is not None and int(existing["benefit_applied"]) == 1:
+                return "ALREADY_PROCESSED"
+
+            user_row = conn.execute("SELECT id FROM users WHERE email = ?", (clean_email,)).fetchone()
+            benefit_applied = 1 if user_row is not None else 0
+
+            conn.execute(
+                """
+                INSERT INTO payments (
+                    payment_id, user_email, plan_type, amount_ars, currency_id,
+                    mp_status, benefit_applied, created_at_iso
+                ) VALUES (?, ?, ?, ?, ?, 'approved', ?, ?)
+                ON CONFLICT(payment_id) DO UPDATE SET benefit_applied = excluded.benefit_applied
+                """,
+                (clean_pid, clean_email, plan_type, amount_ars, currency_id, benefit_applied, now),
+            )
+
+            if user_row is None:
+                return "USER_NOT_FOUND"
+
+            if plan_type == "PASE_COMPLETO":
+                conn.execute(
+                    "UPDATE users SET has_paid_pass = 1, updated_at_iso = ? WHERE email = ?",
+                    (now, clean_email),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE users
+                    SET free_consultations_used = MAX(free_consultations_used - 1, 0), updated_at_iso = ?
+                    WHERE email = ?
+                    """,
+                    (now, clean_email),
+                )
+            return "ACTIVATED"
+
+    def get_payment(self, payment_id: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM payments WHERE payment_id = ?", (str(payment_id).strip(),)).fetchone()
+            return dict(row) if row else None
 
     # --- FILTRO CRIPTOGRÁFICO ANTI-ABUSO (SHA-256) ---
     def is_document_already_processed_free(self, sha256_hash: str) -> bool:

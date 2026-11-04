@@ -255,19 +255,17 @@ class TestMvpRefactorRoadmap(unittest.TestCase):
         pref2 = resp_pref_pass.json()
         self.assertEqual(pref2["amount"], "24500.00")
 
-        # 3. Webhook de Mercado Pago
+        # 3. Webhook en modo MOCK: sin verificación contra la API de MP nunca se acredita nada
         resp_webhook = self.client.post(
             "/payments/webhook",
             json={
                 "type": "payment",
                 "data": {"id": "1234567890"},
-                "additional_info": {
-                    "external_reference": f"{user_email}:UNLIMITED_PASS:mock_tx"
-                },
             },
         )
         self.assertEqual(resp_webhook.status_code, 200)
-        self.assertEqual(resp_webhook.json()["status"], "PROCESSED")
+        self.assertEqual(resp_webhook.json()["status"], "IGNORED")
+        self.assertFalse(self.client.get("/auth/me", headers=headers).json()["has_paid_pass"])
 
         # 4. Activar pase y verificar que el usuario pueda consultar sin límite
         resp_activate = self.client.post("/payments/mock-activate", headers=headers)

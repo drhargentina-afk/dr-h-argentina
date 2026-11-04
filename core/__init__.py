@@ -46,7 +46,11 @@ from core.database import DrHDatabase
 from core.mercadopago_gateway import (
     CreatePreferenceRequest,
     CreatePreferenceResponse,
+    MercadoPagoError,
     MercadoPagoGateway,
+    MercadoPagoStatus,
+    WebhookResult,
+    WebhookSignatureError,
 )
 from core.privacy_anonymizer import PrivacyAnonymizer, SessionAnonymizerMap
 from core.rate_limiter_queue import (
@@ -86,7 +90,9 @@ __all__ = [
     "GoogleAuthRequest",
     "GoogleAuthResponse",
     "GoogleOAuthManager",
+    "MercadoPagoError",
     "MercadoPagoGateway",
+    "MercadoPagoStatus",
     "PreQuoteResponse",
     "PreliminaryMoneyCalculation",
     "PrivacyAnonymizer",
@@ -101,5 +107,7 @@ __all__ = [
     "SubscriptionTier",
     "UserRole",
     "VolatileExpedienteSession",
+    "WebhookResult",
+    "WebhookSignatureError",
     "ZeroStorageDriveManager",
 ]

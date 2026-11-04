@@ -877,14 +877,15 @@
         }
 
         const pref = await resp.json();
-        const checkoutUrl = pref.init_point || pref.sandbox_init_point;
+        const checkoutUrl = pref.init_point;
 
-        if (checkoutUrl && !checkoutUrl.includes("sandbox-mock")) {
+        if (!pref.is_mock && checkoutUrl) {
           if (statusBox) {
             statusBox.className = "state-banner success";
             statusBox.textContent = "Redirigiendo a Mercado Pago para abonar de forma segura...";
           }
-          window.open(checkoutUrl, "_blank", "noopener,noreferrer");
+          // Misma pestaña: window.open tras un await es bloqueado por los navegadores móviles.
+          window.location.assign(checkoutUrl);
         } else {
           // Entorno Sandbox / Local sin credenciales en vivo de MP: permitir activación de prueba
           if (statusBox) {
@@ -911,11 +912,44 @@
     }
 
     if (btnPayMp) {
-      btnPayMp.addEventListener("click", () => handlePaymentRequest("SINGLE_CONSULTATION"));
+      btnPayMp.addEventListener("click", () => handlePaymentRequest("CONSULTA_INDIVIDUAL"));
     }
     if (btnPayPass) {
-      btnPayPass.addEventListener("click", () => handlePaymentRequest("UNLIMITED_PASS"));
+      btnPayPass.addEventListener("click", () => handlePaymentRequest("PASE_COMPLETO"));
     }
+  }
+
+  /**
+   * Retorno desde el checkout (back_urls `?payment=success|pending|failure`).
+   * El pase lo acredita exclusivamente el Webhook del servidor; acá solo se informa al usuario
+   * y se limpia el parámetro de la URL para no dejar rastro en el historial.
+   */
+  function handlePaymentReturn() {
+    const params = new URLSearchParams(window.location.search);
+    const result = params.get("payment");
+    if (!result) return;
+
+    const messages = {
+      success: ["success", "¡Pago aprobado! Ingresá con Google para continuar: tu pase ya quedó acreditado en tu cuenta."],
+      pending: ["info", "Tu pago está pendiente de confirmación. Se acreditará automáticamente apenas Mercado Pago lo apruebe."],
+      failure: ["error", "El pago no se completó. No se realizó ningún cobro; podés intentarlo nuevamente."]
+    };
+    const [kind, text] = messages[result] || ["error", "No pudimos determinar el resultado del pago."];
+    showLoginFeedback(text, kind);
+
+    const statusBox = document.getElementById("payment-status-feedback");
+    if (statusBox) {
+      statusBox.className = kind === "error" ? "state-banner error" : "state-banner success";
+      statusBox.textContent = text;
+      statusBox.classList.remove("hidden");
+    }
+
+    params.delete("payment");
+    ["collection_id", "collection_status", "payment_id", "status", "external_reference",
+      "payment_type", "merchant_order_id", "preference_id", "site_id", "processing_mode",
+      "merchant_account_id"].forEach((key) => params.delete(key));
+    const cleanQuery = params.toString();
+    window.history.replaceState(null, "", `${window.location.pathname}${cleanQuery ? `?${cleanQuery}` : ""}`);
   }
 
   // =========================================================================
@@ -1007,6 +1041,6 @@
     document.getElementById("btn-refresh-cases")?.addEventListener("click", loadUserCases);
 
     // Restaurar sesión sin dejar rastros en DOM
-    restoreActiveSession();
+    restoreActiveSession().then(handlePaymentReturn);
   });
 })();

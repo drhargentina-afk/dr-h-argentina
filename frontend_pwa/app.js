@@ -37,7 +37,9 @@
     lastFinalReport: null,
     casesList: [],
     isSocialUnlocked: false,
-    externalPaymentUrl: "https://dr-h-argentina.onrender.com/#payment-external",
+    microPaymentUrl: "https://dr-h-argentina.onrender.com/#payment-micro",
+    monthlyPaymentUrl: "https://dr-h-argentina.onrender.com/#payment-monthly",
+    externalPaymentUrl: "https://dr-h-argentina.onrender.com/#payment-monthly",
     socialShareText: "Descubrí @DrHArgentina: asistente legal gratuito en lenguaje claro para revisar contratos y causas judiciales sin contraseñas.",
     appUrl: "https://dr-h-argentina.onrender.com"
   };
@@ -904,6 +906,8 @@
       const resp = await fetch("/payments/config");
       if (resp.ok) {
         const cfg = await resp.json();
+        if (cfg.micro_payment_url) state.microPaymentUrl = cfg.micro_payment_url;
+        if (cfg.monthly_payment_url) state.monthlyPaymentUrl = cfg.monthly_payment_url;
         if (cfg.external_payment_url) state.externalPaymentUrl = cfg.external_payment_url;
         if (cfg.social_share_text) state.socialShareText = cfg.social_share_text;
         if (cfg.app_url) state.appUrl = cfg.app_url;
@@ -918,6 +922,8 @@
     const btnShareX = document.getElementById("btn-share-x");
     const btnShareFb = document.getElementById("btn-share-facebook");
     const btnShareThreads = document.getElementById("btn-share-threads");
+    const btnPayMicro = document.getElementById("btn-pay-micro");
+    const btnPayMonthly = document.getElementById("btn-pay-monthly");
     const btnPayExternal = document.getElementById("btn-pay-external");
     const statusBox = document.getElementById("payment-status-feedback");
 
@@ -982,9 +988,23 @@
     if (btnShareFb) btnShareFb.addEventListener("click", () => triggerSocialShare("facebook"));
     if (btnShareThreads) btnShareThreads.addEventListener("click", () => triggerSocialShare("threads"));
 
+    if (btnPayMicro) {
+      btnPayMicro.addEventListener("click", () => {
+        const targetUrl = state.microPaymentUrl || state.externalPaymentUrl || "https://dr-h-argentina.onrender.com/#payment-micro";
+        window.open(targetUrl, "_blank", "noopener,noreferrer");
+      });
+    }
+
+    if (btnPayMonthly) {
+      btnPayMonthly.addEventListener("click", () => {
+        const targetUrl = state.monthlyPaymentUrl || state.externalPaymentUrl || "https://dr-h-argentina.onrender.com/#payment-monthly";
+        window.open(targetUrl, "_blank", "noopener,noreferrer");
+      });
+    }
+
     if (btnPayExternal) {
       btnPayExternal.addEventListener("click", () => {
-        const targetUrl = state.externalPaymentUrl || "https://dr-h-argentina.onrender.com/#payment-external";
+        const targetUrl = state.monthlyPaymentUrl || state.externalPaymentUrl || "https://dr-h-argentina.onrender.com/#payment-monthly";
         window.open(targetUrl, "_blank", "noopener,noreferrer");
       });
     }

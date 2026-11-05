@@ -87,9 +87,17 @@ class ServerSecurityConfig(BaseModel):
     )
     admin_session_ttl_hours: int = Field(default=12, ge=1, le=168)
     google_client_id: str = Field(default="", description="Client ID de Google Identity Services OAuth 2.0.")
+    external_micro_payment_url: str = Field(
+        default="https://dr-h-argentina.onrender.com/#payment-micro",
+        description="URL externa para Pack Micro-Consultas / Multas USD 2.00 (EXTERNAL_MICRO_PAYMENT_URL).",
+    )
+    external_monthly_payment_url: str = Field(
+        default="https://dr-h-argentina.onrender.com/#payment-monthly",
+        description="URL externa para Pase Mensual por Expediente USD 5.00 (EXTERNAL_MONTHLY_PAYMENT_URL).",
+    )
     external_payment_url: str = Field(
-        default="https://gumroad.com",
-        description="URL externa de pago anónimo/MoR (Gumroad, Lemon Squeezy, Stripe) configurada en EXTERNAL_PAYMENT_URL.",
+        default="https://dr-h-argentina.onrender.com/#payment-monthly",
+        description="URL externa de fallback (EXTERNAL_PAYMENT_URL).",
     )
     database_url: str = Field(default="", description="Ruta de base de datos SQLite o DATABASE_URL PostgreSQL.")
     node_country: str = Field(default="AR", min_length=2, max_length=2)
@@ -127,16 +135,30 @@ class ServerSecurityConfig(BaseModel):
         except ValueError as exc:
             raise ValueError("ADMIN_SESSION_TTL_HOURS debe ser un número entero de horas.") from exc
 
+        raw_monthly_url = _get("EXTERNAL_MONTHLY_PAYMENT_URL", "").strip()
+        raw_micro_url = _get("EXTERNAL_MICRO_PAYMENT_URL", "").strip()
+        raw_legacy_url = _get("EXTERNAL_PAYMENT_URL", "").strip()
+
+        monthly_url = (
+            raw_monthly_url
+            or raw_legacy_url
+            or "https://dr-h-argentina.onrender.com/#payment-monthly"
+        )
+        micro_url = (
+            raw_micro_url
+            or "https://dr-h-argentina.onrender.com/#payment-micro"
+        )
+        fallback_url = raw_legacy_url or monthly_url
+
         return cls(
             google_ai_studio_api_key=SecretStr(raw_key.strip()),
             admin_user=_get("ADMIN_USER", DEFAULT_ADMIN_USER).strip(),
             admin_password=_resolve_admin_password(_get("ADMIN_PASSWORD", "")),
             admin_session_ttl_hours=ttl_hours,
             google_client_id=_get("GOOGLE_CLIENT_ID", "").strip(),
-            external_payment_url=_get(
-                "EXTERNAL_PAYMENT_URL",
-                "https://dr-h-argentina.onrender.com/#payment-external",
-            ).strip(),
+            external_micro_payment_url=micro_url,
+            external_monthly_payment_url=monthly_url,
+            external_payment_url=fallback_url,
             database_url=_get("DATABASE_URL", "").strip(),
             node_country=_get("DR_H_NODE_COUNTRY", "AR"),
             platform_version=_get("DR_H_PLATFORM_VERSION", "1.4.0-AR-PWA"),

@@ -47,14 +47,39 @@ class TestPaymentSocialAndExternal(unittest.TestCase):
         self.headers = {"Authorization": f"Bearer {self.token}"}
 
     def test_payment_config_endpoint_and_env_injection(self) -> None:
-        """Comprueba que /payments/config devuelva la URL configurada y textos de difusión."""
+        """Comprueba que /payments/config devuelva micro_payment_url, monthly_payment_url y textos de difusión."""
         resp = self.client.get("/payments/config")
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
+        self.assertIn("micro_payment_url", data)
+        self.assertIn("monthly_payment_url", data)
         self.assertIn("external_payment_url", data)
         self.assertIn("social_share_text", data)
         self.assertIn("app_url", data)
         self.assertIn("@DrHArgentina", data["social_share_text"])
+        self.assertTrue(data["micro_payment_url"].startswith("http"))
+        self.assertTrue(data["monthly_payment_url"].startswith("http"))
+
+    def test_security_config_env_variable_overrides(self) -> None:
+        """Verifica que las variables EXTERNAL_MICRO_PAYMENT_URL y EXTERNAL_MONTHLY_PAYMENT_URL se inyecten."""
+        old_micro = os.environ.get("EXTERNAL_MICRO_PAYMENT_URL")
+        old_monthly = os.environ.get("EXTERNAL_MONTHLY_PAYMENT_URL")
+        try:
+            os.environ["EXTERNAL_MICRO_PAYMENT_URL"] = "https://lemon-squeezy.com/buy/micro-test"
+            os.environ["EXTERNAL_MONTHLY_PAYMENT_URL"] = "https://lemon-squeezy.com/buy/monthly-test"
+            cfg = ServerSecurityConfig.load()
+            self.assertEqual(cfg.external_micro_payment_url, "https://lemon-squeezy.com/buy/micro-test")
+            self.assertEqual(cfg.external_monthly_payment_url, "https://lemon-squeezy.com/buy/monthly-test")
+            self.assertEqual(cfg.external_payment_url, "https://lemon-squeezy.com/buy/monthly-test")
+        finally:
+            if old_micro is not None:
+                os.environ["EXTERNAL_MICRO_PAYMENT_URL"] = old_micro
+            else:
+                os.environ.pop("EXTERNAL_MICRO_PAYMENT_URL", None)
+            if old_monthly is not None:
+                os.environ["EXTERNAL_MONTHLY_PAYMENT_URL"] = old_monthly
+            else:
+                os.environ.pop("EXTERNAL_MONTHLY_PAYMENT_URL", None)
 
     def test_social_unlock_all_networks_and_database_persistence(self) -> None:
         """Verifica que compartir en cualquiera de las 4 redes otorgue el pase completo."""
@@ -140,7 +165,11 @@ class TestPaymentSocialAndExternal(unittest.TestCase):
         self.assertIn('id="btn-share-x"', html_text)
         self.assertIn('id="btn-share-facebook"', html_text)
         self.assertIn('id="btn-share-threads"', html_text)
+        self.assertIn('id="btn-pay-micro"', html_text)
+        self.assertIn('id="btn-pay-monthly"', html_text)
         self.assertIn('id="btn-pay-external"', html_text)
+        self.assertIn("Pack Micro-Consultas / Multas (USD 2.00)", html_text)
+        self.assertIn("Pase Mensual por Expediente (USD 5.00)", html_text)
 
         # Eliminación de Mercado Pago en HTML y JS
         self.assertNotIn("Mercado Pago", html_text)

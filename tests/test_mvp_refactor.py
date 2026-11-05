@@ -237,6 +237,8 @@ class TestMvpRefactorRoadmap(unittest.TestCase):
         resp_cfg = self.client.get("/payments/config")
         self.assertEqual(resp_cfg.status_code, 200)
         cfg_data = resp_cfg.json()
+        self.assertIn("micro_payment_url", cfg_data)
+        self.assertIn("monthly_payment_url", cfg_data)
         self.assertIn("external_payment_url", cfg_data)
         self.assertIn("social_share_text", cfg_data)
         self.assertIn("app_url", cfg_data)

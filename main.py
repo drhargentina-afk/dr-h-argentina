@@ -569,9 +569,11 @@ async def add_movement_endpoint(
 # =========================================================================
 
 class PaymentConfigResponse(BaseModel):
-    """Configuración de monetización y enlace de pago externo / MoR."""
+    """Configuración de monetización dual: pago social y enlaces de checkout externo / MoR."""
     model_config = ConfigDict(extra="forbid")
-    external_payment_url: str
+    micro_payment_url: str = Field(description="URL checkout externo Lemon Squeezy USD 2.00 (Micro-consultas y multas).")
+    monthly_payment_url: str = Field(description="URL checkout externo Lemon Squeezy USD 5.00 (Pase Mensual por Expediente).")
+    external_payment_url: str = Field(description="URL externa general de fallback (MoR).")
     social_share_text: str
     app_url: str
 
@@ -593,10 +595,12 @@ class SocialUnlockResponse(BaseModel):
 
 @app.get("/payments/config", response_model=PaymentConfigResponse, tags=["Monetización Dual"])
 async def payments_config_endpoint() -> PaymentConfigResponse:
-    """Devuelve la URL externa de pago (Gumroad, Lemon Squeezy, Stripe) y el texto promocional para redes."""
-    ext_url = orchestrator.security_config.external_payment_url
+    """Devuelve las URLs externas de pago (Lemon Squeezy MoR en USD) y el texto promocional para redes."""
+    cfg = orchestrator.security_config
     return PaymentConfigResponse(
-        external_payment_url=ext_url,
+        micro_payment_url=cfg.external_micro_payment_url,
+        monthly_payment_url=cfg.external_monthly_payment_url,
+        external_payment_url=cfg.external_payment_url,
         social_share_text=(
             "Descubrí @DrHArgentina: asistente legal gratuito en lenguaje claro para revisar "
             "contratos y expedientes judiciales sin contraseñas."

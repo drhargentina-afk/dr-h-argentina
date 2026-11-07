@@ -418,7 +418,7 @@
   </header>
 
   <!-- MODAL DISCRETO PRIMEROS PASOS: CÓMO OBTENER CLAVE JUDICIAL GRATUITA -->
-  <dialog id="modal-primeros-pasos" class="modal-dialog hidden" aria-labelledby="modal-primeros-pasos-title" style="border:1px solid var(--border-subtle);border-radius:var(--radius-lg);background:var(--bg-surface);color:var(--text-primary);max-width:560px;width:92%;padding:1.4rem;box-shadow:0 12px 36px rgba(0,0,0,0.3);position:fixed;top:50%;left:50%;transform:translate(-50%, -50%);z-index:9999;">
+  <div id="modal-primeros-pasos" class="modal-dialog hidden" aria-labelledby="modal-primeros-pasos-title" role="dialog" aria-modal="true" style="display:none;border:1px solid var(--border-subtle);border-radius:var(--radius-lg);background:var(--bg-surface);color:var(--text-primary);max-width:560px;width:92%;padding:1.4rem;box-shadow:0 12px 36px rgba(0,0,0,0.3);position:fixed;top:50%;left:50%;transform:translate(-50%, -50%);z-index:9999;">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:0.9rem;gap:1rem;">
       <h3 id="modal-primeros-pasos-title" style="margin:0;font-size:1.15rem;display:flex;align-items:center;gap:0.4rem;">
         🏛️ Primeros Pasos: Tu Clave Judicial Gratuita
@@ -463,11 +463,11 @@
     </div>
 
     <div style="margin-top:1.1rem;text-align:right;">
-      <button id="btn-modal-entendido" type="button" class="btn btn-primary" style="font-size:0.88rem;">
+      <button id="btn-modal-entendido" type="button" class="btn btn-primary" onclick="document.getElementById('btn-close-primeros-pasos').click();" style="font-size:0.88rem;">
         Entendido
       </button>
     </div>
-  </dialog>
+  </div>
   <div id="modal-primeros-pasos-backdrop" class="modal-backdrop hidden" style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:9998;backdrop-filter:blur(2px);"></div>
 
   <main class="main-container" role="main">

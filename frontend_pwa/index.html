@@ -403,6 +403,9 @@
         <p>Tu asistente legal en lenguaje claro y seguimiento asíncrono de causas.</p>
       </div>
       <div class="header-controls" role="navigation" aria-label="Controles">
+        <button id="btn-primeros-pasos" type="button" class="btn btn-secondary" aria-haspopup="dialog" aria-expanded="false" title="Guía para obtener tu clave judicial gratuita">
+          📖 Primeros Pasos
+        </button>
         <span id="user-session-badge" class="user-pill hidden"></span>
         <button id="btn-logout" type="button" class="btn btn-secondary hidden">
           Cerrar Sesión
@@ -413,6 +416,59 @@
       </div>
     </div>
   </header>
+
+  <!-- MODAL DISCRETO PRIMEROS PASOS: CÓMO OBTENER CLAVE JUDICIAL GRATUITA -->
+  <dialog id="modal-primeros-pasos" class="modal-dialog hidden" aria-labelledby="modal-primeros-pasos-title" style="border:1px solid var(--border-subtle);border-radius:var(--radius-lg);background:var(--bg-surface);color:var(--text-primary);max-width:560px;width:92%;padding:1.4rem;box-shadow:0 12px 36px rgba(0,0,0,0.3);position:fixed;top:50%;left:50%;transform:translate(-50%, -50%);z-index:9999;">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:0.9rem;gap:1rem;">
+      <h3 id="modal-primeros-pasos-title" style="margin:0;font-size:1.15rem;display:flex;align-items:center;gap:0.4rem;">
+        🏛️ Primeros Pasos: Tu Clave Judicial Gratuita
+      </h3>
+      <button id="btn-close-primeros-pasos" type="button" class="btn btn-secondary" style="padding:0.25rem 0.55rem;font-size:0.85rem;" aria-label="Cerrar ventana">
+        ✕
+      </button>
+    </div>
+
+    <div style="font-size:0.89rem;color:var(--text-secondary);display:flex;flex-direction:column;gap:0.8rem;line-height:1.45;">
+      <p>
+        Como ciudadano interesado o parte de una causa (actor, demandado, querellante o imputado), tenés derecho a consultar tu expediente de forma <strong>100% gratuita</strong> sin intermediarios.
+      </p>
+
+      <div style="background:var(--bg-elevated);border-left:4px solid var(--accent-brand);padding:0.75rem 0.9rem;border-radius:var(--radius-sm);">
+        <strong style="color:var(--text-primary);display:block;margin-bottom:0.25rem;">📍 Cómo solicitar tu clave en Mesa de Entradas:</strong>
+        <ol style="margin:0;padding-left:1.2rem;font-size:0.85rem;color:var(--text-primary);">
+          <li>Acercate con tu <strong>DNI original</strong> a la Mesa de Entradas del juzgado o tribunal interviniente.</li>
+          <li>Pedí al oficial de mesa que te dé de alta como parte con clave de consulta virtual para el expediente.</li>
+          <li>El trámite es completamente gratuito e inmediato: te asignarán usuario y clave web.</li>
+          <li>Ingresá al portal que corresponda a tu jurisdicción, descargá las actuaciones en PDF y subilas acá a Dr. H para auditarlas al instante en criollo.</li>
+        </ol>
+      </div>
+
+      <div>
+        <strong style="color:var(--text-primary);display:block;margin-bottom:0.35rem;">🌐 Enlaces directos a los Portales Oficiales:</strong>
+        <div style="display:flex;flex-direction:column;gap:0.45rem;">
+          <a href="https://scw.pjn.gov.ar/scw/home.seam" target="_blank" rel="noopener noreferrer" class="btn btn-secondary" style="justify-content:space-between;text-decoration:none;font-size:0.86rem;padding:0.5rem 0.8rem;">
+            <span>🏛️ <strong>PJN</strong> — Poder Judicial de la Nación (Federal y Nacional)</span>
+            <span style="font-size:0.76rem;color:var(--accent-brand);">scw.pjn.gov.ar ↗</span>
+          </a>
+          <a href="https://mev.scba.gov.ar/" target="_blank" rel="noopener noreferrer" class="btn btn-secondary" style="justify-content:space-between;text-decoration:none;font-size:0.86rem;padding:0.5rem 0.8rem;">
+            <span>⚖️ <strong>MEV</strong> — Mesa de Entradas Virtual (Prov. de Buenos Aires)</span>
+            <span style="font-size:0.76rem;color:var(--accent-brand);">mev.scba.gov.ar ↗</span>
+          </a>
+          <a href="https://eje.juscaba.gob.ar/" target="_blank" rel="noopener noreferrer" class="btn btn-secondary" style="justify-content:space-between;text-decoration:none;font-size:0.86rem;padding:0.5rem 0.8rem;">
+            <span>🏙️ <strong>EJE CABA</strong> — Expediente Judicial Electrónico (CABA)</span>
+            <span style="font-size:0.76rem;color:var(--accent-brand);">eje.juscaba.gob.ar ↗</span>
+          </a>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top:1.1rem;text-align:right;">
+      <button id="btn-modal-entendido" type="button" class="btn btn-primary" style="font-size:0.88rem;">
+        Entendido
+      </button>
+    </div>
+  </dialog>
+  <div id="modal-primeros-pasos-backdrop" class="modal-backdrop hidden" style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:9998;backdrop-filter:blur(2px);"></div>
 
   <main class="main-container" role="main">
     <!-- 1. AUTENTICACIÓN GOOGLE OAUTH 2.0 (CERO CONTRASEÑAS) -->
@@ -426,19 +482,34 @@
         </div>
       </div>
 
-      <div style="display:flex;flex-direction:column;align-items:center;gap:1rem;margin-top:1rem;">
+      <div style="display:flex;flex-direction:column;align-items:center;gap:1rem;margin-top:1rem;width:100%;">
         <!-- Botón GIS de Google -->
         <div id="google-signin-btn-container"></div>
 
-        <button id="btn-continue-google" type="button" class="btn btn-google btn-large">
-          <svg width="18" height="18" viewBox="0 0 18 18" style="margin-right:6px;">
-            <path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.616z"/>
-            <path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.258c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/>
-            <path fill="#FBBC05" d="M3.964 10.707c-.18-.54-.282-1.117-.282-1.707s.102-1.167.282-1.707V4.961H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.039l3.007-2.332z"/>
-            <path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.961L3.964 7.293C4.672 5.166 6.656 3.58 9 3.58z"/>
-          </svg>
-          Continuar con Google
-        </button>
+        <form id="google-login-form" autocomplete="off" onsubmit="return false;" style="width:100%;max-width:380px;display:flex;flex-direction:column;gap:0.75rem;">
+          <div class="form-field">
+            <label for="input-google-email" style="font-size:0.86rem;color:var(--text-secondary);text-align:left;">
+              Ingresá con tu correo de Google (@gmail.com):
+            </label>
+            <input
+              id="input-google-email"
+              type="email"
+              class="form-input"
+              placeholder="tu.correo@gmail.com"
+              autocomplete="off"
+            />
+          </div>
+
+          <button id="btn-continue-google" type="button" class="btn btn-google btn-large" style="width:100%;">
+            <svg width="18" height="18" viewBox="0 0 18 18" style="margin-right:6px;">
+              <path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.616z"/>
+              <path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.258c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/>
+              <path fill="#FBBC05" d="M3.964 10.707c-.18-.54-.282-1.117-.282-1.707s.102-1.167.282-1.707V4.961H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.039l3.007-2.332z"/>
+              <path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.961L3.964 7.293C4.672 5.166 6.656 3.58 9 3.58z"/>
+            </svg>
+            Continuar con Google
+          </button>
+        </form>
 
         <div id="login-feedback" class="state-banner hidden" role="alert" aria-live="assertive"></div>
       </div>
@@ -446,13 +517,13 @@
 
     <!-- ÁREA DE CONSULTA Y SEGUIMIENTO -->
     <div id="app-workspace" class="hidden" style="display:flex;flex-direction:column;gap:1.5rem;">
-      <!-- MURO DE PAGO SOCIAL Y ACCESO INTERNACIONAL (GUMROAD/STRIPE) -->
+      <!-- MURO DE PAGO SOCIAL Y ACCESO INTERNACIONAL (LEMON SQUEEZY) -->
       <section id="social-paywall-card" class="panel-card hidden" style="border:2px solid var(--accent-brand);">
         <div class="panel-header">
           <div>
-            <h2>Muro de Pago Social & Acceso Internacional</h2>
+            <h2>Muro de Pago Social & Acceso Comercial (MoR)</h2>
             <p style="font-size:0.9rem;color:var(--text-secondary);margin-top:0.25rem;">
-              Tu primera consulta fue procesada. Para desbloquear las descargas y seguir analizando expedientes, elegí cómo acceder:
+              Tu primera consulta fue procesada. Para desbloquear la lectura completa del informe, los descargables y seguir analizando causas, elegí cómo acceder:
             </p>
           </div>
         </div>
@@ -464,17 +535,20 @@
             <span class="user-pill" style="background-color:var(--ok-surface);color:var(--status-ok);font-size:0.75rem;">100% Bonificado</span>
           </div>
           <p style="font-size:0.88rem;color:var(--text-secondary);">
-            Ayudanos a difundir Dr. H compartiendo en cualquiera de tus redes. Al hacer clic en un botón, tus descargas y causas se desbloquean al instante:
+            Ayudanos a difundir Dr. H compartiendo en cualquiera de tus redes. Al hacer clic en un botón, tu informe y descargables se desbloquean al instante:
           </p>
-          <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));gap:0.65rem;">
+          <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(170px, 1fr));gap:0.65rem;">
             <button id="btn-share-whatsapp" type="button" class="btn btn-primary" style="background-color:#25D366;border-color:#25D366;color:#ffffff;">
               💬 Compartir en WhatsApp
             </button>
-            <button id="btn-share-x" type="button" class="btn btn-secondary">
-              ✖️ Compartir en X
-            </button>
             <button id="btn-share-facebook" type="button" class="btn btn-secondary" style="border-color:#1877F2;color:#1877F2;">
               📘 Compartir en Facebook
+            </button>
+            <button id="btn-share-instagram" type="button" class="btn btn-secondary" style="border-color:#E1306C;color:#E1306C;">
+              📸 Compartir en Instagram
+            </button>
+            <button id="btn-share-x" type="button" class="btn btn-secondary">
+              ✖️ Compartir en X
             </button>
             <button id="btn-share-threads" type="button" class="btn btn-secondary">
               🧵 Compartir en Threads
@@ -482,22 +556,22 @@
           </div>
         </div>
 
-        <!-- Opción 2: Pago Internacional Anónimo (MoR Lemon Squeezy en USD) -->
+        <!-- Opción 2: Pago Comercial Anónimo (Lemon Squeezy MoR en ARS) -->
         <div style="background-color:var(--bg-elevated);border:1px solid var(--border-subtle);border-radius:var(--radius-md);padding:1.1rem;display:flex;flex-direction:column;gap:0.75rem;">
           <div style="display:flex;align-items:center;gap:0.5rem;">
-            <strong style="font-size:1.02rem;">Opción 2: Pago Internacional Anónimo (USD)</strong>
+            <strong style="font-size:1.02rem;">Opción 2: Pago Comercial Anónimo (Lemon Squeezy MoR)</strong>
             <span class="user-pill" style="font-size:0.75rem;">Lemon Squeezy MoR</span>
           </div>
           <p style="font-size:0.88rem;color:var(--text-secondary);">
-            Si preferís no compartir en redes, podés abonar el acceso anónimo en dólares según el tipo de caso:
+            Si preferís no compartir en redes, podés abonar el acceso anónimo mediante Lemon Squeezy en pesos argentinos según tu necesidad:
           </p>
           <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(260px, 1fr));gap:0.75rem;">
             <button id="btn-pay-micro" type="button" class="btn btn-secondary btn-large" style="font-weight:700;display:flex;flex-direction:column;align-items:center;gap:0.25rem;">
-              <span>⚡ Pack Micro-Consultas / Multas (USD 2.00)</span>
-              <span style="font-size:0.75rem;font-weight:400;color:var(--text-secondary);">Consultas simples y fotomultas</span>
+              <span>⚡ Pack Micro-Consultas / Recargas: $4.000 ARS</span>
+              <span style="font-size:0.75rem;font-weight:400;color:var(--text-secondary);">Consultas simples, multas y recargas</span>
             </button>
             <button id="btn-pay-monthly" type="button" class="btn btn-primary btn-large" style="font-weight:700;display:flex;flex-direction:column;align-items:center;gap:0.25rem;">
-              <span>⭐ Pase Mensual por Expediente (USD 5.00)</span>
+              <span>⭐ Pase Mensual por Expediente: $20.000 ARS</span>
               <span style="font-size:0.75rem;font-weight:400;color:#e6f4ea;">Causas completas y seguimiento ilimitado</span>
             </button>
           </div>
@@ -586,6 +660,14 @@
         </div>
 
         <div id="report-content-wrap" style="display:flex;flex-direction:column;gap:1.15rem;">
+          <!-- Alerta de Bloqueo por Muro Social -->
+          <div id="report-locked-alert" class="state-banner warning hidden" role="alert" style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;flex-wrap:wrap;">
+            <span>🔒 <strong>Lectura y entregables bloqueados:</strong> Compartí Dr. H en una red social (WhatsApp, Facebook, Instagram o X) para ver tu dictamen y copiar los mensajes listos.</span>
+            <button id="btn-unlock-now" type="button" class="btn btn-primary" style="font-size:0.85rem;padding:0.4rem 0.8rem;">
+              Desbloquear Ahora (Gratis)
+            </button>
+          </div>
+
           <!-- Semáforo de Urgencia -->
           <div id="do-not-sign-banner" class="urgency-banner safe" role="alert">
             <span id="do-not-sign-title">Podés avanzar</span>

@@ -82,8 +82,8 @@ class TestPaymentSocialAndExternal(unittest.TestCase):
                 os.environ.pop("EXTERNAL_MONTHLY_PAYMENT_URL", None)
 
     def test_social_unlock_all_networks_and_database_persistence(self) -> None:
-        """Verifica que compartir en cualquiera de las 4 redes otorgue el pase completo."""
-        for network in ("whatsapp", "x", "facebook", "threads"):
+        """Verifica que compartir en cualquiera de las redes (WhatsApp, Facebook, Instagram, X) otorgue el pase."""
+        for network in ("whatsapp", "facebook", "instagram", "x", "threads"):
             sub_tag = uuid.uuid4().hex[:6]
             sub_email = f"net_{network}_{sub_tag}@gmail.com"
             sub_login = self.client.post(
@@ -164,14 +164,28 @@ class TestPaymentSocialAndExternal(unittest.TestCase):
         self.assertIn('id="btn-share-whatsapp"', html_text)
         self.assertIn('id="btn-share-x"', html_text)
         self.assertIn('id="btn-share-facebook"', html_text)
+        self.assertIn('id="btn-share-instagram"', html_text)
         self.assertIn('id="btn-share-threads"', html_text)
         self.assertIn('id="btn-pay-micro"', html_text)
         self.assertIn('id="btn-pay-monthly"', html_text)
         self.assertIn('id="btn-pay-external"', html_text)
-        self.assertIn("Pack Micro-Consultas / Multas (USD 2.00)", html_text)
-        self.assertIn("Pase Mensual por Expediente (USD 5.00)", html_text)
+        self.assertIn("Pack Micro-Consultas / Recargas: $4.000 ARS", html_text)
+        self.assertIn("Pase Mensual por Expediente: $20.000 ARS", html_text)
 
-        # Eliminación de Mercado Pago en HTML y JS
+        # Modal Primeros Pasos y portales judiciales oficiales
+        self.assertIn('id="modal-primeros-pasos"', html_text)
+        self.assertIn('id="btn-primeros-pasos"', html_text)
+        self.assertIn("scw.pjn.gov.ar", html_text)
+        self.assertIn("mev.scba.gov.ar", html_text)
+        self.assertIn("eje.juscaba.gob.ar", html_text)
+        self.assertIn("Mesa de Entradas", html_text)
+
+        # Autenticación Google fluida sin bloqueos
+        self.assertIn('id="input-google-email"', html_text)
+        self.assertIn('id="btn-continue-google"', html_text)
+        self.assertIn('id="report-locked-alert"', html_text)
+
+        # Eliminación total de Mercado Pago en HTML y JS
         self.assertNotIn("Mercado Pago", html_text)
         self.assertNotIn("btn-pay-mercadopago", html_text)
 
@@ -180,6 +194,8 @@ class TestPaymentSocialAndExternal(unittest.TestCase):
         js_text = resp_js.text
         self.assertIn("/payments/social-unlock", js_text)
         self.assertIn("/payments/config", js_text)
+        self.assertIn("initPrimerosPasosModal", js_text)
+        self.assertIn("instagram", js_text)
         self.assertNotIn("mercadopago", js_text.lower())
         self.assertNotIn("create-preference", js_text)
 

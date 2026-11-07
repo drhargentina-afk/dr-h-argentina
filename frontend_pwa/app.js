@@ -108,8 +108,12 @@
     try {
       if (token) {
         sessionStorage.setItem(TOKEN_STORAGE_KEY, token);
+        localStorage.setItem(TOKEN_STORAGE_KEY, token);
       } else {
         sessionStorage.removeItem(TOKEN_STORAGE_KEY);
+        localStorage.removeItem(TOKEN_STORAGE_KEY);
+        sessionStorage.removeItem(ADMIN_STORAGE_KEY);
+        localStorage.removeItem(ADMIN_STORAGE_KEY);
       }
     } catch (err) {
       console.warn("Error guardando token:", err);
@@ -118,22 +122,16 @@
 
   function readStoredSessionToken() {
     try {
-      return sessionStorage.getItem(TOKEN_STORAGE_KEY) || sessionStorage.getItem(ADMIN_STORAGE_KEY);
+      return (
+        sessionStorage.getItem(TOKEN_STORAGE_KEY) ||
+        localStorage.getItem(TOKEN_STORAGE_KEY) ||
+        sessionStorage.getItem(ADMIN_STORAGE_KEY) ||
+        localStorage.getItem(ADMIN_STORAGE_KEY)
+      );
     } catch (err) {
       return null;
     }
   }
-
-  // Limpieza estricta al descargar o cerrar la pestaña (Fix reinicio Windows)
-  window.addEventListener("beforeunload", () => {
-    try {
-      sessionStorage.removeItem(TOKEN_STORAGE_KEY);
-      sessionStorage.removeItem(ADMIN_STORAGE_KEY);
-      sessionStorage.removeItem("drh_active_user");
-    } catch (err) {
-      // Ignorar en cierre
-    }
-  });
 
   // =========================================================================
   // 2. CLIENTE API CON ENCABEZADOS DE AUTORIZACIÓN
@@ -205,11 +203,14 @@
       }
       if (btnLogout) btnLogout.classList.remove("hidden");
 
-      // Si consumió la prueba gratuita y no tiene pase activo, mostrar el muro social
+      // Si consumió la prueba gratuita y no tiene pase activo, mostrar el muro social y alerta de bloqueo
+      const lockedAlert = document.getElementById("report-locked-alert");
       if (isDeliverablesLocked()) {
         if (paywallCard) paywallCard.classList.remove("hidden");
+        if (lockedAlert) lockedAlert.classList.remove("hidden");
       } else {
         if (paywallCard) paywallCard.classList.add("hidden");
+        if (lockedAlert) lockedAlert.classList.add("hidden");
       }
 
       // Cargar causas del usuario
@@ -227,11 +228,14 @@
   }
 
   // =========================================================================
-  // 3. AUTENTICACIÓN GOOGLE OAUTH 2.0
+  // 3. AUTENTICACIÓN GOOGLE OAUTH 2.0 (FLUIDA, INMEDIATA Y SIN INTERMITENCIAS)
   // =========================================================================
 
   async function submitGoogleCredential(credentialToken) {
     showLoginFeedback("Validando con Google...", "info");
+    const btnContinue = document.getElementById("btn-continue-google");
+    if (btnContinue) btnContinue.disabled = true;
+
     try {
       const resp = await fetch("/auth/google", {
         method: "POST",
@@ -249,15 +253,19 @@
       showLoginFeedback("", "info");
       setLoggedInView(data.user);
     } catch (err) {
-      showLoginFeedback(err.message || "No se pudo iniciar sesión.", "error");
+      showLoginFeedback(err.message || "No se pudo iniciar sesión con Google.", "error");
+    } finally {
+      if (btnContinue) btnContinue.disabled = false;
     }
   }
 
   function initGoogleOAuth() {
     const btnContinue = document.getElementById("btn-continue-google");
+    const emailInput = document.getElementById("input-google-email");
+    const loginForm = document.getElementById("google-login-form");
     const container = document.getElementById("google-signin-btn-container");
 
-    // Inicializar Google Identity Services si está disponible en ventana
+    // Inicializar Google Identity Services si el SDK externo está cargado
     if (window.google && window.google.accounts && window.google.accounts.id) {
       try {
         window.google.accounts.id.initialize({
@@ -281,25 +289,27 @@
       }
     }
 
-    // Botón directo "Continuar con Google"
+    async function handleGoogleLoginAction() {
+      let email = emailInput ? emailInput.value.trim() : "";
+      if (!email || !email.includes("@")) {
+        email = "usuario.consulta@gmail.com";
+        if (emailInput) emailInput.value = email;
+      }
+      const credential = `mock_google_oauth:${email.toLowerCase()}:Ciudadano Google`;
+      await submitGoogleCredential(credential);
+    }
+
     if (btnContinue) {
-      btnContinue.addEventListener("click", async () => {
-        if (window.google && window.google.accounts && window.google.accounts.id) {
-          try {
-            window.google.accounts.id.prompt();
-            return;
-          } catch (e) {
-            // Continuar al modal simplificado
-          }
-        }
-        const userEmail = window.prompt(
-          "Ingresá tu correo de Google (@gmail.com) para acceder con 1 consulta gratuita:",
-          "usuario.ciudadano@gmail.com"
-        );
-        if (userEmail && userEmail.trim().includes("@")) {
-          const mockCredential = `mock_google_oauth:${userEmail.trim().toLowerCase()}:Ciudadano Google`;
-          await submitGoogleCredential(mockCredential);
-        }
+      btnContinue.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        handleGoogleLoginAction();
+      });
+    }
+
+    if (loginForm) {
+      loginForm.addEventListener("submit", (ev) => {
+        ev.preventDefault();
+        handleGoogleLoginAction();
       });
     }
 
@@ -921,7 +931,9 @@
     const btnShareWa = document.getElementById("btn-share-whatsapp");
     const btnShareX = document.getElementById("btn-share-x");
     const btnShareFb = document.getElementById("btn-share-facebook");
+    const btnShareIg = document.getElementById("btn-share-instagram");
     const btnShareThreads = document.getElementById("btn-share-threads");
+    const btnUnlockNow = document.getElementById("btn-unlock-now");
     const btnPayMicro = document.getElementById("btn-pay-micro");
     const btnPayMonthly = document.getElementById("btn-pay-monthly");
     const btnPayExternal = document.getElementById("btn-pay-external");
@@ -940,6 +952,15 @@
         shareUrl = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(targetAppUrl)}&quote=${encodeURIComponent(shareText)}`;
       } else if (network === "threads") {
         shareUrl = `https://www.threads.net/intent/post?text=${encodeURIComponent(shareText + " " + targetAppUrl)}`;
+      } else if (network === "instagram") {
+        try {
+          if (navigator.clipboard) {
+            await navigator.clipboard.writeText(`${shareText} ${targetAppUrl}`);
+          }
+        } catch (e) {
+          // Continuar
+        }
+        shareUrl = "https://www.instagram.com/";
       }
 
       if (shareUrl) {
@@ -950,7 +971,8 @@
       if (statusBox) {
         statusBox.className = "state-banner";
         statusBox.classList.remove("hidden");
-        statusBox.textContent = `Procesando difusión en ${network.capitalize()}...`;
+        const extraNote = network === "instagram" ? " (Texto promocional copiado al portapapeles)" : "";
+        statusBox.textContent = `Procesando difusión en ${network.capitalize()}...${extraNote}`;
       }
 
       try {
@@ -968,7 +990,7 @@
           }
           if (statusBox) {
             statusBox.className = "state-banner success";
-            statusBox.textContent = "🎉 ¡Acceso Desbloqueado! Gracias por difundir Dr. H en redes. Ya podés descargar tu informe completo y utilizar todas las funciones.";
+            statusBox.textContent = "🎉 ¡Acceso Desbloqueado! Gracias por difundir Dr. H en redes. Ya podés leer tu dictamen completo y descargar tu informe.";
           }
           // Actualizar vista
           setLoggedInView(state.currentUser);
@@ -978,7 +1000,7 @@
         state.isSocialUnlocked = true;
         if (statusBox) {
           statusBox.className = "state-banner success";
-          statusBox.textContent = "🎉 ¡Acceso Desbloqueado! Ya podés descargar tu informe y acceder a todas las funciones.";
+          statusBox.textContent = "🎉 ¡Acceso Desbloqueado! Ya podés leer tu dictamen y acceder a todas las funciones.";
         }
       }
     }
@@ -986,7 +1008,14 @@
     if (btnShareWa) btnShareWa.addEventListener("click", () => triggerSocialShare("whatsapp"));
     if (btnShareX) btnShareX.addEventListener("click", () => triggerSocialShare("x"));
     if (btnShareFb) btnShareFb.addEventListener("click", () => triggerSocialShare("facebook"));
+    if (btnShareIg) btnShareIg.addEventListener("click", () => triggerSocialShare("instagram"));
     if (btnShareThreads) btnShareThreads.addEventListener("click", () => triggerSocialShare("threads"));
+
+    if (btnUnlockNow) {
+      btnUnlockNow.addEventListener("click", () => {
+        promptSocialPaywall("desbloquear la lectura completa del informe y los descargables");
+      });
+    }
 
     if (btnPayMicro) {
       btnPayMicro.addEventListener("click", () => {
@@ -1008,6 +1037,43 @@
         window.open(targetUrl, "_blank", "noopener,noreferrer");
       });
     }
+  }
+
+  // =========================================================================
+  // 10. MODAL PRIMEROS PASOS (CLAVE JUDICIAL PJN, MEV, EJE CABA)
+  // =========================================================================
+
+  function initPrimerosPasosModal() {
+    const btnOpen = document.getElementById("btn-primeros-pasos");
+    const modal = document.getElementById("modal-primeros-pasos");
+    const backdrop = document.getElementById("modal-primeros-pasos-backdrop");
+    const btnClose = document.getElementById("btn-close-primeros-pasos");
+    const btnEntendido = document.getElementById("btn-modal-entendido");
+
+    if (!modal) return;
+
+    function openModal() {
+      modal.classList.remove("hidden");
+      if (backdrop) backdrop.classList.remove("hidden");
+      if (btnOpen) btnOpen.setAttribute("aria-expanded", "true");
+    }
+
+    function closeModal() {
+      modal.classList.add("hidden");
+      if (backdrop) backdrop.classList.add("hidden");
+      if (btnOpen) btnOpen.setAttribute("aria-expanded", "false");
+    }
+
+    if (btnOpen) btnOpen.addEventListener("click", openModal);
+    if (btnClose) btnClose.addEventListener("click", closeModal);
+    if (btnEntendido) btnEntendido.addEventListener("click", closeModal);
+    if (backdrop) backdrop.addEventListener("click", closeModal);
+
+    window.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape" && !modal.classList.contains("hidden")) {
+        closeModal();
+      }
+    });
   }
 
   // =========================================================================
@@ -1088,6 +1154,7 @@
 
   document.addEventListener("DOMContentLoaded", () => {
     initThemeToggle();
+    initPrimerosPasosModal();
     initServiceWorker();
     initGoogleOAuth();
     initUnifiedInputControls();

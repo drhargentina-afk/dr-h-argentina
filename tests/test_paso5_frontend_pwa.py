@@ -53,7 +53,13 @@ class TestPaso5FrontendPwaAndRateLimiter(unittest.TestCase):
         self.assertIn('id="cases-dashboard-section"', resp_index.text)
         self.assertIn('id="social-paywall-card"', resp_index.text)
         self.assertIn('id="btn-share-whatsapp"', resp_index.text)
+        self.assertIn('id="btn-share-instagram"', resp_index.text)
         self.assertIn('id="btn-pay-external"', resp_index.text)
+        self.assertIn('id="btn-primeros-pasos"', resp_index.text)
+        self.assertIn('id="modal-primeros-pasos"', resp_index.text)
+        self.assertIn('id="input-google-email"', resp_index.text)
+        self.assertIn("Pack Micro-Consultas / Recargas: $4.000 ARS", resp_index.text)
+        self.assertIn("Pase Mensual por Expediente: $20.000 ARS", resp_index.text)
         self.assertIn(
             "Legislación actualizada automáticamente todos los días a las 07:00 AM",
             resp_index.text,

@@ -571,8 +571,8 @@ async def add_movement_endpoint(
 class PaymentConfigResponse(BaseModel):
     """Configuración de monetización dual: pago social y enlaces de checkout externo / MoR."""
     model_config = ConfigDict(extra="forbid")
-    micro_payment_url: str = Field(description="URL checkout externo Lemon Squeezy USD 2.00 (Micro-consultas y multas).")
-    monthly_payment_url: str = Field(description="URL checkout externo Lemon Squeezy USD 5.00 (Pase Mensual por Expediente).")
+    micro_payment_url: str = Field(description="URL checkout externo Lemon Squeezy $4.000 ARS (Micro-consultas y recargas).")
+    monthly_payment_url: str = Field(description="URL checkout externo Lemon Squeezy $20.000 ARS (Pase Mensual por Expediente).")
     external_payment_url: str = Field(description="URL externa general de fallback (MoR).")
     social_share_text: str
     app_url: str
@@ -581,7 +581,7 @@ class PaymentConfigResponse(BaseModel):
 class SocialUnlockRequest(BaseModel):
     """Notificación de evento de difusión social para desbloqueo automático."""
     model_config = ConfigDict(extra="forbid")
-    network: str = Field(default="whatsapp", description="Red social donde se compartió (whatsapp, x, facebook, threads).")
+    network: str = Field(default="whatsapp", description="Red social donde se compartió (whatsapp, facebook, instagram, x, threads).")
 
 
 class SocialUnlockResponse(BaseModel):

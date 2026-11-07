@@ -89,11 +89,11 @@ class ServerSecurityConfig(BaseModel):
     google_client_id: str = Field(default="", description="Client ID de Google Identity Services OAuth 2.0.")
     external_micro_payment_url: str = Field(
         default="https://dr-h-argentina.onrender.com/#payment-micro",
-        description="URL externa para Pack Micro-Consultas / Multas USD 2.00 (EXTERNAL_MICRO_PAYMENT_URL).",
+        description="URL externa Lemon Squeezy para Pack Micro-Consultas / Recargas $4.000 ARS (EXTERNAL_MICRO_PAYMENT_URL).",
     )
     external_monthly_payment_url: str = Field(
         default="https://dr-h-argentina.onrender.com/#payment-monthly",
-        description="URL externa para Pase Mensual por Expediente USD 5.00 (EXTERNAL_MONTHLY_PAYMENT_URL).",
+        description="URL externa Lemon Squeezy para Pase Mensual por Expediente $20.000 ARS (EXTERNAL_MONTHLY_PAYMENT_URL).",
     )
     external_payment_url: str = Field(
         default="https://dr-h-argentina.onrender.com/#payment-monthly",

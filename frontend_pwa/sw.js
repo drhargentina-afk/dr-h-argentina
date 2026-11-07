@@ -9,7 +9,7 @@
  *    /repository-consult, /cron-07am, /health) garantizando Zero-Storage de expedientes en caché.
  */
 
-const CACHE_NAME = "dr-h-argentina-pwa-v1.5.0-admin";
+const CACHE_NAME = "dr-h-argentina-pwa-v2.2.0";
 const APP_SHELL_ASSETS = [
   "/",
   "/index.html",
@@ -71,22 +71,18 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Estrategia Stale-While-Revalidate para el App Shell estático
+  // Estrategia Network-First para el App Shell estático (evita servir código obsoleto de caché)
   event.respondWith(
-    caches.match(event.request).then((cachedResponse) => {
-      const networkFetch = fetch(event.request)
-        .then((networkResponse) => {
-          if (networkResponse && networkResponse.status === 200) {
-            const cloned = networkResponse.clone();
-            caches.open(CACHE_NAME).then((cache) => {
-              cache.put(event.request, cloned);
-            });
-          }
-          return networkResponse;
-        })
-        .catch(() => cachedResponse);
-
-      return cachedResponse || networkFetch;
-    })
+    fetch(event.request)
+      .then((networkResponse) => {
+        if (networkResponse && networkResponse.status === 200) {
+          const cloned = networkResponse.clone();
+          caches.open(CACHE_NAME).then((cache) => {
+            cache.put(event.request, cloned);
+          });
+        }
+        return networkResponse;
+      })
+      .catch(() => caches.match(event.request))
   );
 });

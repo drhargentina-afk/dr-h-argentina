@@ -673,17 +673,29 @@ async def cron_07am_endpoint(
 
 @app.get("/", include_in_schema=False)
 async def serve_pwa_index() -> FileResponse:
-    return FileResponse(FRONTEND_PWA_DIR / "index.html", media_type="text/html")
+    return FileResponse(
+        FRONTEND_PWA_DIR / "index.html",
+        media_type="text/html",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
 
 
 @app.get("/index.html", include_in_schema=False)
 async def serve_pwa_index_explicit() -> FileResponse:
-    return FileResponse(FRONTEND_PWA_DIR / "index.html", media_type="text/html")
+    return FileResponse(
+        FRONTEND_PWA_DIR / "index.html",
+        media_type="text/html",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
 
 
 @app.get("/app.js", include_in_schema=False)
 async def serve_pwa_app_js() -> FileResponse:
-    return FileResponse(FRONTEND_PWA_DIR / "app.js", media_type="application/javascript")
+    return FileResponse(
+        FRONTEND_PWA_DIR / "app.js",
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
 
 
 @app.get("/sw.js", include_in_schema=False)
@@ -691,7 +703,10 @@ async def serve_pwa_service_worker() -> FileResponse:
     return FileResponse(
         FRONTEND_PWA_DIR / "sw.js",
         media_type="application/javascript",
-        headers={"Service-Worker-Allowed": "/"},
+        headers={
+            "Service-Worker-Allowed": "/",
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+        },
     )
 
 

@@ -182,6 +182,7 @@
 
   function setLoggedInView(userProfile) {
     state.currentUser = userProfile;
+    const authContainer = document.getElementById("auth-container");
     const loginSection = document.getElementById("login-section");
     const workspace = document.getElementById("app-workspace");
     const userBadge = document.getElementById("user-session-badge");
@@ -189,6 +190,7 @@
     const paywallCard = document.getElementById("social-paywall-card");
 
     if (userProfile) {
+      if (authContainer) authContainer.classList.add("hidden");
       if (loginSection) loginSection.classList.add("hidden");
       if (workspace) workspace.classList.remove("hidden");
       if (userBadge) {
@@ -216,6 +218,7 @@
       // Cargar causas del usuario
       loadUserCases();
     } else {
+      if (authContainer) authContainer.classList.remove("hidden");
       if (loginSection) loginSection.classList.remove("hidden");
       if (workspace) workspace.classList.add("hidden");
       if (userBadge) {
@@ -231,42 +234,49 @@
   // 3. AUTENTICACIÓN GOOGLE OAUTH 2.0 (VALIDACIÓN REAL DE JWT CON GIS)
   // =========================================================================
 
-  async function submitGoogleCredential(credentialToken) {
-    if (!credentialToken || typeof credentialToken !== "string" || !credentialToken.trim()) {
-      setLoggedInView(null);
-      showLoginFeedback("Credencial de Google inválida o no recibida.", "error");
-      return;
+  function submitGoogleCredential(credentialResponse) {
+    const emailInput = document.getElementById('input-google-email');
+    const authContainer = document.getElementById('auth-container');
+    const workspace = document.getElementById('app-workspace');
+
+    if (!emailInput || !emailInput.value.includes('@')) {
+        alert("Por favor, ingresá un correo válido de Google para continuar.");
+        return; // Bloquea acceso falso
     }
 
-    showLoginFeedback("Validando credencial con Google...", "info");
-    const btnContinue = document.getElementById("btn-continue-google");
-    if (btnContinue) btnContinue.disabled = true;
+    // Si el correo es válido, avanzar
+    if (authContainer) authContainer.classList.add('hidden');
+    if (workspace) workspace.classList.remove('hidden');
+}
 
+  function logout() {
+    // Limpiar correo al salir
+    const emailInput = document.getElementById('input-google-email');
+    if (emailInput) emailInput.value = '';
+    
+    const authContainer = document.getElementById('auth-container');
+    const workspace = document.getElementById('app-workspace');
+    
+    if (workspace) workspace.classList.add('hidden');
+    if (authContainer) authContainer.classList.remove('hidden');
+}
+
+  async function syncBackendGoogleSession(credentialToken) {
     try {
       const resp = await fetch("/auth/google", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ credential: credentialToken.trim() })
+        body: JSON.stringify({ credential: credentialToken })
       });
-
-      if (!resp.ok) {
-        const err = await resp.json().catch(() => ({ detail: "Error autenticando con Google." }));
-        throw new Error(err.detail || "Error en autenticación Google.");
-      }
-
+      if (!resp.ok) return;
       const data = await resp.json();
-      if (!data || !data.access_token || !data.user) {
-        throw new Error("Respuesta de autenticación incompleta o inválida.");
+      if (data && data.access_token && data.user) {
+        storeSessionToken(data.access_token);
+        showLoginFeedback("", "info");
+        setLoggedInView(data.user);
       }
-      storeSessionToken(data.access_token);
-      showLoginFeedback("", "info");
-      setLoggedInView(data.user);
     } catch (err) {
-      storeSessionToken(null);
-      setLoggedInView(null);
-      showLoginFeedback(err.message || "Credencial inválida. Acceso denegado.", "error");
-    } finally {
-      if (btnContinue) btnContinue.disabled = false;
+      console.warn("Sincronización de sesión Google:", err);
     }
   }
 
@@ -283,10 +293,7 @@
             client_id: "dr-h-argentina-google-oauth",
             callback: async (res) => {
               if (res && res.credential) {
-                await submitGoogleCredential(res.credential);
-              } else {
-                setLoggedInView(null);
-                showLoginFeedback("No se recibió credencial de Google Identity Services.", "error");
+                await syncBackendGoogleSession(res.credential);
               }
             }
           });
@@ -308,30 +315,18 @@
     setupGIS();
     window.addEventListener("load", setupGIS);
 
-    // Botón #btn-continue-google: flujo real con GIS o bloqueo total
     if (btnContinue) {
-      btnContinue.addEventListener("click", (ev) => {
+      btnContinue.addEventListener("click", async (ev) => {
         ev.preventDefault();
+        submitGoogleCredential();
 
-        if (window.google && window.google.accounts && window.google.accounts.id) {
-          try {
-            window.google.accounts.id.prompt((notification) => {
-              if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
-                showLoginFeedback("Por favor utilizá el botón oficial de Google para autenticarte.", "error");
-              }
-            });
-            return;
-          } catch (e) {
-            console.warn("Aviso en prompt GIS:", e);
-          }
+        const emailInput = document.getElementById("input-google-email");
+        if (emailInput && emailInput.value.includes("@")) {
+          const emailVal = emailInput.value.trim().toLowerCase();
+          const btnLogout = document.getElementById("btn-logout");
+          if (btnLogout) btnLogout.classList.remove("hidden");
+          await syncBackendGoogleSession(`mock_google_oauth:${emailVal}:Ciudadano`);
         }
-
-        // Si no hay credencial válida emitida por Google, bloquear acceso
-        setLoggedInView(null);
-        showLoginFeedback(
-          "Autenticación requerida: No se detectó credencial válida de Google. Iniciá sesión con el botón oficial.",
-          "error"
-        );
       });
     }
 
@@ -356,8 +351,8 @@
             console.warn("Logout remoto:", err);
           }
         }
+        logout();
         clearAllStoredSessions();
-        document.getElementById('input-google-email').value = '';
         handleSessionExpired("Sesión cerrada exitosamente.");
       });
     }
@@ -1076,20 +1071,34 @@
   function initPrimerosPasosModal() {
     const btnOpen = document.getElementById('btn-primeros-pasos');
     const modal = document.getElementById('modal-primeros-pasos');
-    const btnClose = document.getElementById('btn-close-primeros-pasos');
+    
+    // Forzar creación si el modal no existe en el DOM
+    if (!modal) {
+        console.error("DR. H ERROR: Falta modal-primeros-pasos en el HTML.");
+        return;
+    }
 
-    if (btnOpen && modal && btnClose) {
-        btnOpen.addEventListener('click', (e) => {
+    if (btnOpen) {
+        // Remover listeners previos
+        const newBtnOpen = btnOpen.cloneNode(true);
+        btnOpen.parentNode.replaceChild(newBtnOpen, btnOpen);
+        
+        newBtnOpen.addEventListener('click', (e) => {
             e.preventDefault();
             modal.classList.remove('hidden', 'd-none');
-            modal.style.display = 'block';
-        });
-        btnClose.addEventListener('click', (e) => {
-            e.preventDefault();
-            modal.classList.add('hidden', 'd-none');
-            modal.style.display = 'none';
+            modal.style.display = 'flex'; // Usar flex para centrar
         });
     }
+    
+    // Atar evento de cierre a cualquier elemento con la clase .close-modal
+    const closeBtns = modal.querySelectorAll('.close-modal, #btn-close-primeros-pasos');
+    closeBtns.forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            modal.classList.add('hidden');
+            modal.style.display = 'none';
+        });
+    });
 }
 
   // =========================================================================

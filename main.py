@@ -727,23 +727,9 @@ class SocialUnlockResponse(BaseModel):
     has_paid_pass: bool
 
 
-class CheckoutRedirectRequest(BaseModel):
-    """Solicitud de link de pago para redirigir al checkout comercial."""
-    model_config = ConfigDict(extra="forbid")
-    plan_type: Literal["MICRO", "MONTHLY"] = Field(default="MONTHLY", description="Tipo de plan elegido (MICRO $4.000 ARS o MONTHLY $20.000 ARS).")
-
-
-class CheckoutRedirectResponse(BaseModel):
-    """Respuesta con URL de redirección (init_point) hacia la pasarela configurada."""
-    model_config = ConfigDict(extra="forbid")
-    init_point: str
-    checkout_url: str
-    plan_type: Literal["MICRO", "MONTHLY"]
-
-
 @app.get("/payments/config", response_model=PaymentConfigResponse, tags=["Monetización Dual"])
 async def payments_config_endpoint() -> PaymentConfigResponse:
-    """Devuelve las URLs externas de pago (Lemon Squeezy MoR en ARS) y el texto promocional para redes."""
+    """Devuelve las URLs externas de pago (Lemon Squeezy MoR en USD) y el texto promocional para redes."""
     cfg = orchestrator.security_config
     return PaymentConfigResponse(
         micro_payment_url=cfg.external_micro_payment_url,
@@ -754,23 +740,6 @@ async def payments_config_endpoint() -> PaymentConfigResponse:
             "contratos y expedientes judiciales sin contraseñas."
         ),
         app_url="https://dr-h-argentina.onrender.com",
-    )
-
-
-@app.post("/payments/checkout", response_model=CheckoutRedirectResponse, tags=["Monetización Dual"])
-@app.post("/payments/create-preference", response_model=CheckoutRedirectResponse, tags=["Monetización Dual"])
-async def payments_checkout_endpoint(req: CheckoutRedirectRequest) -> CheckoutRedirectResponse:
-    """Obtiene el init_point de checkout según el plan seleccionado (MICRO o MONTHLY)."""
-    cfg = orchestrator.security_config
-    target_url = (
-        cfg.external_micro_payment_url
-        if req.plan_type == "MICRO"
-        else cfg.external_monthly_payment_url
-    )
-    return CheckoutRedirectResponse(
-        init_point=target_url,
-        checkout_url=target_url,
-        plan_type=req.plan_type,
     )
 
 

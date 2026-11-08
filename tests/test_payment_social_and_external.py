@@ -60,15 +60,6 @@ class TestPaymentSocialAndExternal(unittest.TestCase):
         self.assertTrue(data["micro_payment_url"].startswith("http"))
         self.assertTrue(data["monthly_payment_url"].startswith("http"))
 
-        # Verificar endpoint POST /payments/checkout que retorna init_point
-        resp_micro = self.client.post("/payments/checkout", json={"plan_type": "MICRO"})
-        self.assertEqual(resp_micro.status_code, 200)
-        self.assertEqual(resp_micro.json()["init_point"], data["micro_payment_url"])
-
-        resp_monthly = self.client.post("/payments/checkout", json={"plan_type": "MONTHLY"})
-        self.assertEqual(resp_monthly.status_code, 200)
-        self.assertEqual(resp_monthly.json()["init_point"], data["monthly_payment_url"])
-
     def test_security_config_env_variable_overrides(self) -> None:
         """Verifica que las variables EXTERNAL_MICRO_PAYMENT_URL y EXTERNAL_MONTHLY_PAYMENT_URL se inyecten."""
         old_micro = os.environ.get("EXTERNAL_MICRO_PAYMENT_URL")
@@ -205,9 +196,6 @@ class TestPaymentSocialAndExternal(unittest.TestCase):
         js_text = resp_js.text
         self.assertIn("/payments/social-unlock", js_text)
         self.assertIn("/payments/config", js_text)
-        self.assertIn("/payments/checkout", js_text)
-        self.assertIn("window.location.href", js_text)
-        self.assertIn("Cargando...", js_text)
         self.assertIn("initPrimerosPasosModal", js_text)
         self.assertIn("instagram", js_text)
         self.assertNotIn("mercadopago", js_text.lower())

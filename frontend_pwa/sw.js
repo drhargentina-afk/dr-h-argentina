@@ -9,7 +9,7 @@
  *    /repository-consult, /cron-07am, /health) garantizando Zero-Storage de expedientes en caché.
  */
 
-const CACHE_NAME = "dr-h-argentina-pwa-v3.0.0";
+const CACHE_NAME = "dr-h-argentina-pwa-v3.1.0";
 const APP_SHELL_ASSETS = [
   "/",
   "/index.html",
@@ -62,12 +62,16 @@ self.addEventListener("message", (event) => {
 self.addEventListener("fetch", (event) => {
   const reqUrl = new URL(event.request.url);
 
+  // Ignorar peticiones de orígenes cruzados (ej. Google Identity Services / OAuth) para evitar errores CORS
+  if (reqUrl.origin !== self.location.origin) {
+    return;
+  }
+
   // Garantía Zero-Storage: JAMÁS cachear peticiones POST ni endpoints procesales de la API
   if (
     event.request.method !== "GET" ||
     API_PATHS_NEVER_CACHE.some((apiPath) => reqUrl.pathname.startsWith(apiPath))
   ) {
-    event.respondWith(fetch(event.request));
     return;
   }
 

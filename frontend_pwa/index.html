@@ -337,6 +337,33 @@
       color: var(--status-ok);
     }
 
+    @keyframes drh-spin {
+      from {
+        transform: rotate(0deg);
+      }
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    .loading-spinner {
+      display: inline-block;
+      width: 1.15rem;
+      height: 1.15rem;
+      border: 2.5px solid var(--border-subtle);
+      border-top-color: var(--accent-brand);
+      border-radius: 50%;
+      animation: drh-spin 0.8s linear infinite;
+      flex-shrink: 0;
+    }
+
+    .state-banner.loading {
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+      font-weight: 500;
+    }
+
     .action-buttons-bar {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -720,7 +747,10 @@
             </div>
           </div>
 
-          <div id="consultation-state-banner" class="state-banner hidden" role="status" aria-live="polite"></div>
+          <div id="consultation-state-banner" class="state-banner hidden" role="status" aria-live="polite">
+            <span id="consultation-loading-spinner" class="loading-spinner hidden" aria-hidden="true"></span>
+            <span id="consultation-state-text"></span>
+          </div>
 
           <button id="btn-run-full-analysis" type="button" class="btn btn-primary btn-large">
             Consultar a Dr. H

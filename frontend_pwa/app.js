@@ -560,16 +560,38 @@
     return executeUnifiedConsultation();
   }
 
-  const LOADING_STATUS_SEQUENCE = [
-    "Analizando la documentación del caso...",
-    "Revisando jurisprudencia aplicable...",
-    "Redactando el informe final. Esto puede demorar un poco..."
+  const LOADING_STATUS_STEPS = [
+    { atSeconds: 0, text: "Analizando la documentación del caso..." },
+    { atSeconds: 15, text: "Revisando jurisprudencia aplicable..." },
+    { atSeconds: 30, text: "Redactando el informe final..." },
+    { atSeconds: 60, text: "El análisis es profundo, por favor no cierres la pantalla..." }
   ];
-  const CONSULTATION_TIMEOUT_MS = 120000;
   const BUSY_SERVER_MESSAGE = "El servidor está muy ocupado, intentá de nuevo en unos segundos";
 
-  async function executeUnifiedConsultation() {
+  function updateConsultationBanner(kind, message) {
     const statusBanner = document.getElementById("consultation-state-banner");
+    const spinner = document.getElementById("consultation-loading-spinner");
+    const textSpan = document.getElementById("consultation-state-text");
+    if (!statusBanner) return;
+
+    statusBanner.classList.remove("hidden", "error", "success", "loading");
+    if (kind === "loading") {
+      statusBanner.classList.add("loading");
+      if (spinner) spinner.classList.remove("hidden");
+    } else {
+      if (kind === "error") statusBanner.classList.add("error");
+      if (kind === "success") statusBanner.classList.add("success");
+      if (spinner) spinner.classList.add("hidden");
+    }
+
+    if (textSpan) {
+      textSpan.textContent = message;
+    } else {
+      statusBanner.textContent = message;
+    }
+  }
+
+  async function executeUnifiedConsultation() {
     const btnConsult = document.getElementById("btn-run-full-analysis");
     const verbalText = document.getElementById("input-verbal-statement")?.value.trim() || "";
     const selectedProvince = document.getElementById("select-province-jurisdiction")?.value || "PJN_NACION_CABA";
@@ -577,12 +599,10 @@
     const paywallCard = document.getElementById("social-paywall-card");
 
     if (!state.currentPdfBlob && verbalText.length < 5 && !state.attachedMediaName) {
-      if (statusBanner) {
-        statusBanner.className = "state-banner error";
-        statusBanner.classList.remove("hidden");
-        statusBanner.textContent =
-          "Por favor escribí tu duda, pegá lo que te dijo tu abogado o subí un archivo para analizar.";
-      }
+      updateConsultationBanner(
+        "error",
+        "Por favor escribí tu duda, pegá lo que te dijo tu abogado o subí un archivo para analizar."
+      );
       return;
     }
 
@@ -592,28 +612,18 @@
       btnConsult.textContent = "Procesando consulta...";
     }
 
-    let stepIndex = 0;
-    if (statusBanner) {
-      statusBanner.className = "state-banner";
-      statusBanner.classList.remove("hidden");
-      statusBanner.textContent = LOADING_STATUS_SEQUENCE[0];
-    }
+    let elapsedSeconds = 0;
+    updateConsultationBanner("loading", LOADING_STATUS_STEPS[0].text);
 
     const loadingIntervalId = setInterval(() => {
-      if (stepIndex < LOADING_STATUS_SEQUENCE.length - 1) {
-        stepIndex += 1;
-        if (statusBanner) {
-          statusBanner.textContent = LOADING_STATUS_SEQUENCE[stepIndex];
+      elapsedSeconds += 15;
+      for (let i = LOADING_STATUS_STEPS.length - 1; i >= 0; i -= 1) {
+        if (elapsedSeconds >= LOADING_STATUS_STEPS[i].atSeconds) {
+          updateConsultationBanner("loading", LOADING_STATUS_STEPS[i].text);
+          break;
         }
       }
-    }, 10000);
-
-    const abortController = new AbortController();
-    let didTimeout = false;
-    const timeoutId = setTimeout(() => {
-      didTimeout = true;
-      abortController.abort();
-    }, CONSULTATION_TIMEOUT_MS);
+    }, 15000);
 
     try {
       if (state.currentPdfBlob) {
@@ -629,8 +639,7 @@
 
         const resp = await apiFetch("/analyze-expediente", {
           method: "POST",
-          body: formData,
-          signal: abortController.signal
+          body: formData
         });
 
         if (resp.status === 403) {
@@ -673,7 +682,6 @@
           apiFetch("/emergency-scan", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            signal: abortController.signal,
             body: JSON.stringify({
               document_text: queryText.length >= 10 ? queryText : `${queryText} — revisión preventiva`,
               province_jurisdiction: selectedProvince,
@@ -684,7 +692,6 @@
           apiFetch("/repository-consult", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            signal: abortController.signal,
             body: JSON.stringify({
               query: queryText,
               province_jurisdiction: selectedProvince,
@@ -755,26 +762,18 @@
       }
 
       state.urgentPhotoMode = false;
-      if (statusBanner) {
-        statusBanner.className = "state-banner success";
-        statusBanner.textContent = "¡Análisis completo! Abajo tenés el dictamen y los botones de acción rápida.";
-      }
+      updateConsultationBanner(
+        "success",
+        "¡Análisis completo! Abajo tenés el dictamen y los botones de acción rápida."
+      );
     } catch (err) {
-      if (statusBanner) {
-        statusBanner.className = "state-banner error";
-        statusBanner.classList.remove("hidden");
-        const isAbortOrServerError =
-          didTimeout ||
-          (err && err.name === "AbortError") ||
-          !err ||
-          !err.isUserFacing;
-        statusBanner.textContent = isAbortOrServerError
-          ? BUSY_SERVER_MESSAGE
-          : `Aviso: ${err.message}`;
-      }
+      const isServerError = !err || !err.isUserFacing;
+      updateConsultationBanner(
+        "error",
+        isServerError ? BUSY_SERVER_MESSAGE : `Aviso: ${err.message}`
+      );
     } finally {
       clearInterval(loadingIntervalId);
-      clearTimeout(timeoutId);
       if (btnConsult) {
         btnConsult.disabled = false;
         btnConsult.textContent = originalBtnText;
@@ -1241,24 +1240,58 @@
       });
     }
 
+    async function redirectToLemonCheckout(planType, clickedBtn) {
+      const originalText = clickedBtn ? clickedBtn.innerHTML : "";
+      if (clickedBtn) {
+        clickedBtn.disabled = true;
+        clickedBtn.textContent = "Redirigiendo a Lemon Squeezy...";
+      }
+      if (statusBox) {
+        statusBox.className = "state-banner";
+        statusBox.classList.remove("hidden");
+        statusBox.textContent = "Abriendo pasarela de pago segura (Lemon Squeezy)...";
+      }
+
+      await loadPaymentConfig();
+
+      const candidateUrl =
+        planType === "micro"
+          ? state.microPaymentUrl || state.externalPaymentUrl
+          : state.monthlyPaymentUrl || state.externalPaymentUrl;
+
+      const url_de_lemon =
+        candidateUrl && !candidateUrl.includes("dr-h-argentina.onrender.com/#payment-")
+          ? candidateUrl
+          : candidateUrl || "https://www.lemonsqueezy.com/";
+
+      window.location.href = url_de_lemon;
+
+      setTimeout(() => {
+        if (clickedBtn && originalText) {
+          clickedBtn.disabled = false;
+          clickedBtn.innerHTML = originalText;
+        }
+      }, 2500);
+    }
+
     if (btnPayMicro) {
-      btnPayMicro.addEventListener("click", () => {
-        const url_de_lemon = state.microPaymentUrl || state.externalPaymentUrl || "https://dr-h-argentina.onrender.com/#payment-micro";
-        window.location.href = url_de_lemon;
+      btnPayMicro.addEventListener("click", (e) => {
+        e.preventDefault();
+        redirectToLemonCheckout("micro", btnPayMicro);
       });
     }
 
     if (btnPayMonthly) {
-      btnPayMonthly.addEventListener("click", () => {
-        const url_de_lemon = state.monthlyPaymentUrl || state.externalPaymentUrl || "https://dr-h-argentina.onrender.com/#payment-monthly";
-        window.location.href = url_de_lemon;
+      btnPayMonthly.addEventListener("click", (e) => {
+        e.preventDefault();
+        redirectToLemonCheckout("monthly", btnPayMonthly);
       });
     }
 
     if (btnPayExternal) {
-      btnPayExternal.addEventListener("click", () => {
-        const url_de_lemon = state.monthlyPaymentUrl || state.externalPaymentUrl || "https://dr-h-argentina.onrender.com/#payment-monthly";
-        window.location.href = url_de_lemon;
+      btnPayExternal.addEventListener("click", (e) => {
+        e.preventDefault();
+        redirectToLemonCheckout("monthly", btnPayExternal);
       });
     }
   }

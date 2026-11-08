@@ -55,7 +55,8 @@
       .replace(/\[ISO-[A-Z]+-\d+\]:?\s*/g, "")
       .replace(/Agente000/gi, "Dr. H")
       .replace(/Zero-Storage en RAM/gi, "procesamiento confidencial")
-      .replace(/\s+/g, " ")
+      .replace(/[ \t]+/g, " ")
+      .replace(/\n{3,}/g, "\n\n")
       .trim();
   }
 
@@ -562,6 +563,8 @@
   async function executeUnifiedConsultation() {
     const statusBanner = document.getElementById("consultation-state-banner");
     const verbalText = document.getElementById("input-verbal-statement")?.value.trim() || "";
+    const selectedProvince = document.getElementById("select-province-jurisdiction")?.value || "PJN_NACION_CABA";
+    const cityLocality = document.getElementById("input-city-locality")?.value.trim() || "";
     const paywallCard = document.getElementById("social-paywall-card");
 
     if (!state.currentPdfBlob && verbalText.length < 5 && !state.attachedMediaName) {
@@ -589,6 +592,8 @@
           "user_verbal_statement",
           verbalText || "Solicito análisis de fojas y pasos a seguir."
         );
+        formData.append("province_jurisdiction", selectedProvince);
+        formData.append("city_locality", cityLocality);
 
         const resp = await apiFetch("/analyze-expediente", {
           method: "POST",
@@ -631,7 +636,8 @@
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               document_text: queryText.length >= 10 ? queryText : `${queryText} — revisión preventiva`,
-              province_jurisdiction: "PJN_NACION_CABA",
+              province_jurisdiction: selectedProvince,
+              city_locality: cityLocality,
               user_context_note: state.urgentPhotoMode ? "Escáner de urgencia cámara" : "Consulta directa"
             })
           }),
@@ -640,7 +646,8 @@
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               query: queryText,
-              province_jurisdiction: "PJN_NACION_CABA"
+              province_jurisdiction: selectedProvince,
+              city_locality: cityLocality
             })
           })
         ]);
@@ -654,7 +661,7 @@
 
         const resolvedFuero = repoData.classified_fuero || scanData.detected_fuero || "03_laboral";
         const doNotSign = Boolean(scanData.do_not_sign_yet || (state.urgentPhotoMode && scanData.urgency_level !== "VERDE_INFORMATIVO"));
-        const plainSummary = `${repoData.citizen_clear_answer || ""} ${scanData.plain_explanation || ""}`.trim();
+        const plainSummary = (repoData.citizen_clear_answer || scanData.plain_explanation || "").trim();
         const paddedPlainSummary =
           plainSummary.length >= 40
             ? plainSummary
@@ -671,7 +678,7 @@
           report_id: reportId,
           generated_at_iso: new Date().toISOString(),
           country_code: "AR",
-          province_jurisdiction: "PJN_NACION_CABA",
+          province_jurisdiction: selectedProvince,
           fuero: resolvedFuero,
           subscription_tier_applied: "NIVEL_0_GRATUITO_HASTA_15_PAGS",
           do_not_sign_yet_alert: doNotSign,

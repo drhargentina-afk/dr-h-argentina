@@ -310,6 +310,10 @@ async def analyze_expediente_endpoint(
         ProvinceKey | None,
         Form(description="Jurisdicción procesal opcional (detectada automáticamente si se omite)."),
     ] = None,
+    city_locality: Annotated[
+        str | None,
+        Form(description="Ciudad o localidad informada por el usuario."),
+    ] = None,
     user_role: Annotated[
         UserRole | None,
         Form(description="Rol del ciudadano en el caso."),
@@ -353,6 +357,7 @@ async def analyze_expediente_endpoint(
             file_name=file.filename or "expediente.pdf",
             user_verbal_statement=user_verbal_statement,
             explicit_province=province_jurisdiction,
+            city_locality=city_locality or "",
             explicit_role=user_role,
             claimed_lawyer_fee_pct=fee_dec,
             upfront_cost_requested_ars=upfront_dec,
@@ -439,28 +444,26 @@ def _generate_dynamic_llm_legal_answer(
     province: ProvinceKey,
     normative_citations: list[str],
     fallback_answer: str,
+    city_locality: str = "",
 ) -> str:
-    """Envía el prompt del ciudadano al LLM (Google GenAI) para obtener una respuesta jurídica dinámica en lenguaje claro."""
+    """Envía el prompt del ciudadano al LLM (Google GenAI) con estructura divisoria estricta de 4 secciones."""
     if os.environ.get("PYTEST_CURRENT_TEST") or "unittest" in sys.modules:
         return fallback_answer
     try:
         from google import genai
+        from agents_fueros.base_fuero_agent import BaseFueroAgent
 
         api_key = orchestrator.security_config.google_ai_studio_api_key.get_secret_value()
         if not api_key or len(api_key.strip()) < 16:
             return fallback_answer
 
         client = genai.Client(api_key=api_key.strip())
-        prompt = (
-            "Actuá como Dr. H Argentina, asistente legal ciudadano en lenguaje claro ('en criollo') "
-            "basado estrictamente en derecho argentino vigente.\n"
-            f"Área judicial detectada: {fuero.value}\n"
-            f"Jurisdicción: {province.value}\n"
-            f"Marco normativo de referencia: {'; '.join(normative_citations[:4])}\n"
-            f"Consulta del ciudadano: {query_text}\n\n"
-            "Respondé de forma directa, empática, clara y precisa en un párrafo de 60 a 130 palabras, "
-            "indicando qué dice la ley argentina aplicable a su consulta puntual y qué recaudo inmediato debe tomar. "
-            "No uses respuestas genéricas de otros temas que el usuario no haya mencionado."
+        prompt = BaseFueroAgent.build_strict_gemini_prompt(
+            query_text=query_text,
+            fuero_label=fuero.value,
+            province_label=province.value,
+            city_locality=city_locality,
+            caratula="Consulta ciudadana directa",
         )
         interaction = client.interactions.create(
             model="gemini-3.8-flash",
@@ -494,6 +497,7 @@ async def repository_consult_endpoint(
             province=base_resp.province_jurisdiction,
             normative_citations=base_resp.normative_citations,
             fallback_answer=base_resp.citizen_clear_answer,
+            city_locality=request.city_locality,
         )
         return RepositoryConsultResponse(
             classified_fuero=base_resp.classified_fuero,

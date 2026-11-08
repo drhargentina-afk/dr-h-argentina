@@ -807,6 +807,7 @@ class Agente000Orchestrator:
         file_name: str,
         user_verbal_statement: str = "",
         explicit_province: ProvinceKey | None = None,
+        city_locality: str = "",
         explicit_role: UserRole | None = None,
         claimed_lawyer_fee_pct: Decimal | None = None,
         upfront_cost_requested_ars: Decimal | None = None,
@@ -817,6 +818,7 @@ class Agente000Orchestrator:
         from auditor_revision.report_builder import CitizenReportBuilder
 
         ComplianceShield.assert_safe_input(user_verbal_statement or "", "user_verbal_statement")
+        ComplianceShield.assert_safe_input(city_locality or "", "city_locality")
 
         volatile_session = self.drive_manager.load_and_prequote_in_ram(
             file_bytes=file_bytes,
@@ -873,6 +875,7 @@ class Agente000Orchestrator:
                 session_id=session_id,
                 country_code="AR",
                 province_jurisdiction=detected_province,
+                city_locality=(city_locality or "").strip(),
                 user_role=detected_role,
                 detected_fuero=detected_fuero,
                 caratula_detected=caratula_anon,
@@ -936,16 +939,25 @@ class Agente000Orchestrator:
                 c = fuero_result.preliminary_calculation
                 calc_note = (
                     f" Se identificó un monto base documentado de ${c.base_amount_ars} ARS "
-                    f"(proyección preliminar orientativa: ${c.estimated_total_ars} ARS según {c.calculation_formula_applied})."
+                    f"(proyección preliminar orientativa: ${c.estimated_total_ars} ARS)."
                 )
 
-            citizen_summary = (
-                f"Radiografía Documental de tu Causa ({restored_caratula}): "
-                f"Tu expediente tramita en el área {detected_fuero.value} bajo las reglas de {detected_province.value}. "
-                f"De un total de {volatile_session.pre_quote.total_pages} páginas recibidas, se analizaron "
-                f"{volatile_session.pre_quote.useful_pages_after_hygiene} fojas útiles verificadas "
-                f"(descartando {volatile_session.pre_quote.discarded_junk_pages} páginas sin contenido procesal). "
-                f"{fuero_result.technical_diagnosis}{calc_note}"
+            from agents_fueros.base_fuero_agent import BaseFueroAgent
+
+            prov_display_name = str(province_rules.get("name", detected_province.value))
+            elec_sys_name = str(province_rules.get("electronic_system", "Sistema Judicial Local"))
+            citizen_summary = BaseFueroAgent.format_strict_four_sections(
+                jurisdiction_name=prov_display_name,
+                city_locality=(city_locality or "").strip(),
+                fuero_name=detected_fuero.value,
+                caratula_or_expediente=restored_caratula,
+                juzgado_info=f"Radicación en {elec_sys_name} ({volatile_session.pre_quote.useful_pages_after_hygiene} fojas útiles verificadas)",
+                criollo_explanation=f"{fuero_result.technical_diagnosis}{calc_note}",
+                action_steps=[
+                    "Pedile a tu abogado una copia simple de la última presentación subida al portal electrónico.",
+                    "Revisá las preguntas sugeridas debajo antes de dar conformidad a cualquier escrito o liquidación.",
+                ],
+                deadlines_and_urgency=f"{fuero_result.procedural_deadlines_summary} {audit_result.caducidad_explanation}",
             )
 
             contradictions_text = ""
@@ -1119,13 +1131,27 @@ class Agente000Orchestrator:
             else datetime.now(timezone.utc).date().isoformat()
         )
 
-        answer = (
-            f"[{criollo_translation.get('criollo_situation_detected', fuero.value)}] "
-            f"{criollo_translation.get('plain_explanation', '')} "
-            f"Norma aplicable: {criollo_translation.get('applicable_law_and_article', '')}. "
-            f"Protección inmediata: {criollo_translation.get('immediate_citizen_protection', '')} "
-            f"Jurisdicción {request.province_jurisdiction.value}: opera mediante "
-            f"{prov_rules.get('electronic_system', 'sistema judicial local')} ({prov_rules.get('nota_rule', '')})."
+        from agents_fueros.base_fuero_agent import BaseFueroAgent
+
+        prov_name = str(prov_rules.get("name", request.province_jurisdiction.value))
+        elec_sys = str(prov_rules.get("electronic_system", "sistema judicial local"))
+        nota_rule = str(prov_rules.get("nota_rule", "Días de nota martes y viernes."))
+
+        answer = BaseFueroAgent.format_strict_four_sections(
+            jurisdiction_name=prov_name,
+            city_locality=request.city_locality,
+            fuero_name=fuero.value,
+            caratula_or_expediente=str(criollo_translation.get("criollo_situation_detected", fuero.value)),
+            juzgado_info=f"Competencia territorial local ({elec_sys})",
+            criollo_explanation=str(criollo_translation.get("plain_explanation", "")),
+            action_steps=[
+                str(criollo_translation.get("immediate_citizen_protection", "")),
+                "Conservá todas las pruebas, mensajes, recibos y comprobantes vinculados a tu consulta.",
+            ],
+            deadlines_and_urgency=(
+                f"En esta jurisdicción rige notificación por {elec_sys} ({nota_rule}). "
+                "No dejes vencer los plazos hábiles para contestar intimaciones o presentar tu reclamo."
+            ),
         )
 
         validity_status = (

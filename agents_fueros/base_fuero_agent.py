@@ -239,6 +239,100 @@ class BaseRepositoryConsultant(ABC):
 class BaseFueroAgent(ABC):
     """Clase base para los 7 Sub-Agentes de Fuero convocados en la Fase 2 de Agente000."""
 
+    SYSTEM_PROMPT_GEMINI_ESTRUCTURA_ESTRICTA: str = (
+        "Actuá como Dr. H Argentina, asistente legal ciudadano en lenguaje claro ('en criollo'). "
+        "Es OBLIGATORIO que tu respuesta siga estrictamente esta estructura divisoria de 4 secciones y ninguna otra:\n\n"
+        "Datos del Caso:\n"
+        "- (Lista de viñetas: Solo datos duros. Número de juzgado, jurisdicción, ciudad/localidad, carátula, expediente si los hay. "
+        "PROHIBIDO incluir números de leyes o juzgados en los párrafos de explicación posteriores).\n\n"
+        "¿Qué está pasando? (Explicación en Criollo):\n"
+        "(Un resumen en lenguaje 100% claro, coloquial y empático de la situación, SIN citar artículos, números de leyes ni números de juzgados).\n\n"
+        "Pasos a seguir:\n"
+        "- (Lista clara de acciones prácticas concretas que el usuario debe tomar).\n\n"
+        "Plazos y Urgencia:\n"
+        "(Cuánto tiempo tiene para responder, presentarse o accionar según el caso, si aplica)."
+    )
+
+    _RE_STRIP_NUMBERS_IN_CRIOLLO = re.compile(
+        r"\b(?:Ley(?:\s+Nacional|\s+Provincial)?\s*(?:N[°º]?\s*)?[\d\.]+(?:/\d+)?|"
+        r"Art(?:[íi]culo|\.?)\s*\d+(?:\s*bis|\s*ter|\s*inc\.?\s*[a-z0-9]+)?|"
+        r"Decreto(?:-Ley)?\s*(?:N[°º]?\s*)?[\d\.\/]+|"
+        r"Juzgado\s+(?:Nacional\s+|Provincial\s+|Federal\s+)?(?:N[°º]?\s*)?\d+)\b",
+        re.IGNORECASE,
+    )
+
+    @classmethod
+    def sanitize_criollo_paragraph(cls, text: str) -> str:
+        """Elimina números de leyes, artículos y juzgados de los párrafos de explicación en criollo."""
+        cleaned = cls._RE_STRIP_NUMBERS_IN_CRIOLLO.sub("la normativa aplicable", text)
+        cleaned = re.sub(r"\(\s*la normativa aplicable[^)]*\)", "", cleaned)
+        cleaned = re.sub(r"[ \t]{2,}", " ", cleaned).strip()
+        return cleaned
+
+    @classmethod
+    def build_strict_gemini_prompt(
+        cls,
+        query_text: str,
+        fuero_label: str,
+        province_label: str,
+        city_locality: str = "",
+        caratula: str = "",
+    ) -> str:
+        """Construye el prompt del sistema e instrucciones estrictas de 4 bloques para Gemini."""
+        loc_display = city_locality.strip() if city_locality and city_locality.strip() else "No especificada"
+        caratula_display = caratula.strip() if caratula and caratula.strip() else "Consulta ciudadana directa"
+        return (
+            f"{cls.SYSTEM_PROMPT_GEMINI_ESTRUCTURA_ESTRICTA}\n\n"
+            "Contexto verificado para esta consulta:\n"
+            f"- Jurisdicción provincial: {province_label}\n"
+            f"- Ciudad / Localidad: {loc_display}\n"
+            f"- Área judicial: {fuero_label}\n"
+            f"- Carátula / Expediente: {caratula_display}\n"
+            f"- Relato o documento del usuario: {query_text}\n\n"
+            "Recordatorio estricto: Sacá todos los números de leyes, artículos y juzgados de los párrafos de explicación. "
+            "Usá exclusivamente los 4 encabezados indicados: 'Datos del Caso:', '¿Qué está pasando? (Explicación en Criollo):', "
+            "'Pasos a seguir:' y 'Plazos y Urgencia:'."
+        )
+
+    @classmethod
+    def format_strict_four_sections(
+        cls,
+        *,
+        jurisdiction_name: str,
+        city_locality: str = "",
+        fuero_name: str,
+        caratula_or_expediente: str = "Sin expediente judicial adjunto (consulta preventiva)",
+        juzgado_info: str = "A determinar según sorteo o radicación local",
+        criollo_explanation: str,
+        action_steps: list[str],
+        deadlines_and_urgency: str,
+    ) -> str:
+        """Formatea determinísticamente la salida con las 4 secciones divisorias obligatorias."""
+        loc_text = city_locality.strip() if city_locality and city_locality.strip() else "No informada"
+        clean_criollo = cls.sanitize_criollo_paragraph(criollo_explanation)
+        steps_lines = "\n".join(
+            f"- {cls.sanitize_criollo_paragraph(step)}" for step in action_steps if step.strip()
+        )
+        if not steps_lines:
+            steps_lines = (
+                "- Reunite con tu abogado de confianza o acercate a la defensoría oficial de tu localidad con copia de tus papeles.\n"
+                "- No firmes ningún recibo, acuerdo ni conformidad sin antes leer el texto completo con tranquilidad."
+            )
+        return (
+            "Datos del Caso:\n"
+            f"- Jurisdicción: {jurisdiction_name}\n"
+            f"- Ciudad / Localidad: {loc_text}\n"
+            f"- Área judicial: {fuero_name}\n"
+            f"- Juzgado / Radicación: {juzgado_info}\n"
+            f"- Carátula / Expediente: {caratula_or_expediente}\n\n"
+            "¿Qué está pasando? (Explicación en Criollo):\n"
+            f"{clean_criollo}\n\n"
+            "Pasos a seguir:\n"
+            f"{steps_lines}\n\n"
+            "Plazos y Urgencia:\n"
+            f"{cls.sanitize_criollo_paragraph(deadlines_and_urgency)}"
+        )
+
     _RE_DATE = re.compile(
         r"\b(?:(\d{1,2})[/\-](\d{1,2})[/\-](20\d{2})|(20\d{2})[/\-](\d{1,2})[/\-](\d{1,2}))\b"
     )

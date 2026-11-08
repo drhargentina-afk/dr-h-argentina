@@ -150,6 +150,11 @@ class CaseContext(BaseModel):
         ...,
         description="Jurisdicción procesal argentina detectada o informada.",
     )
+    city_locality: str = Field(
+        default="",
+        max_length=200,
+        description="Ciudad o localidad informada por el usuario o detectada en el caso.",
+    )
     user_role: UserRole = Field(..., description="Rol del ciudadano en el expediente o consulta.")
     detected_fuero: FueroKey = Field(..., description="Especialidad de las 7 áreas judiciales asignada.")
     caratula_detected: str = Field(
@@ -566,6 +571,11 @@ class EmergencyScanRequest(BaseModel):
         default=ProvinceKey.PJN_NACION_CABA,
         description="Provincia donde ocurre la situación.",
     )
+    city_locality: str = Field(
+        default="",
+        max_length=200,
+        description="Ciudad o localidad donde ocurre la situación.",
+    )
     user_context_note: str = Field(
         default="",
         max_length=2000,
@@ -606,6 +616,11 @@ class RepositoryConsultRequest(BaseModel):
     province_jurisdiction: ProvinceKey = Field(
         default=ProvinceKey.PJN_NACION_CABA,
         description="Jurisdicción aplicable.",
+    )
+    city_locality: str = Field(
+        default="",
+        max_length=200,
+        description="Ciudad o localidad informada por el usuario.",
     )
     reference_date: date | None = Field(
         default=None,

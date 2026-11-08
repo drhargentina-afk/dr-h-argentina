@@ -77,10 +77,14 @@ class TestPaso5FrontendPwaAndRateLimiter(unittest.TestCase):
             '<meta property="og:description" content="Tu asistente legal en lenguaje claro. Subí tu expediente y entendelo en criollo.">',
             resp_index.text,
         )
-        self.assertIn('<meta property="og:url" content="https://dr-h-argentina.onrender.com">', resp_index.text)
+        self.assertIn('property="og:url" content="https://dr-h-argentina.onrender.com', resp_index.text)
         self.assertIn('<meta property="og:type" content="website">', resp_index.text)
         self.assertIn(
             '<meta property="og:image" content="https://dr-h-argentina.onrender.com/icons/icon-512x512.png">',
+            resp_index.text,
+        )
+        self.assertIn(
+            '<meta property="og:image:secure_url" content="https://dr-h-argentina.onrender.com/icons/icon-512x512.png">',
             resp_index.text,
         )
         self.assertIn("Pack Micro-Consultas / Recargas: $4.000 ARS", resp_index.text)
@@ -120,6 +124,9 @@ class TestPaso5FrontendPwaAndRateLimiter(unittest.TestCase):
         resp_icon = client.get("/icons/icon-512x512.png")
         self.assertEqual(resp_icon.status_code, 200)
         self.assertEqual(resp_icon.headers.get("content-type"), "image/png")
+
+        resp_icon_head = client.head("/icons/icon-512x512.png")
+        self.assertEqual(resp_icon_head.status_code, 200)
 
         resp_sw = client.get("/sw.js")
         self.assertEqual(resp_sw.status_code, 200)

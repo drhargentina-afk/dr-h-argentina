@@ -805,7 +805,7 @@ async def cron_07am_endpoint(
 # SERVIDOR ESTÁTICO DE LA INTERFAZ PWA CIUDADANA
 # =========================================================================
 
-@app.get("/", include_in_schema=False)
+@app.api_route("/", methods=["GET", "HEAD"], include_in_schema=False)
 async def serve_pwa_index() -> FileResponse:
     return FileResponse(
         FRONTEND_PWA_DIR / "index.html",
@@ -814,7 +814,7 @@ async def serve_pwa_index() -> FileResponse:
     )
 
 
-@app.get("/index.html", include_in_schema=False)
+@app.api_route("/index.html", methods=["GET", "HEAD"], include_in_schema=False)
 async def serve_pwa_index_explicit() -> FileResponse:
     return FileResponse(
         FRONTEND_PWA_DIR / "index.html",
@@ -849,12 +849,20 @@ async def serve_pwa_manifest() -> FileResponse:
     return FileResponse(FRONTEND_PWA_DIR / "manifest.json", media_type="application/manifest+json")
 
 
-@app.get("/icons/icon-512x512.png", include_in_schema=False)
-async def serve_pwa_icon_512() -> FileResponse:
+@app.api_route("/icons/{icon_name}", methods=["GET", "HEAD"], include_in_schema=False)
+async def serve_pwa_icon(icon_name: str) -> FileResponse:
+    clean_name = Path(icon_name).name
+    icon_path = FRONTEND_PWA_DIR / "icons" / clean_name
+    if not icon_path.exists():
+        icon_path = FRONTEND_PWA_DIR / "icons" / "icon-512x512.png"
+    media = "image/jpeg" if icon_path.suffix.lower() in (".jpg", ".jpeg") else "image/png"
     return FileResponse(
-        FRONTEND_PWA_DIR / "icons" / "icon-512x512.png",
-        media_type="image/png",
-        headers={"Cache-Control": "public, max-age=86400"},
+        icon_path,
+        media_type=media,
+        headers={
+            "Cache-Control": "public, max-age=86400",
+            "Access-Control-Allow-Origin": "*",
+        },
     )
 
 

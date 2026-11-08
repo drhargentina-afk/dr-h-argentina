@@ -849,5 +849,14 @@ async def serve_pwa_manifest() -> FileResponse:
     return FileResponse(FRONTEND_PWA_DIR / "manifest.json", media_type="application/manifest+json")
 
 
+@app.get("/icons/icon-512x512.png", include_in_schema=False)
+async def serve_pwa_icon_512() -> FileResponse:
+    return FileResponse(
+        FRONTEND_PWA_DIR / "icons" / "icon-512x512.png",
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
 if FRONTEND_PWA_DIR.exists():
     app.mount("/pwa", StaticFiles(directory=str(FRONTEND_PWA_DIR), html=True), name="frontend_pwa")

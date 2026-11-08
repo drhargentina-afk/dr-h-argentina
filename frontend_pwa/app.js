@@ -884,19 +884,44 @@
           promptSocialPaywall("copiar el borrador de correo formal");
           return;
         }
-        const emailVal = document.getElementById("report-email-text")?.value || "";
+        const emailTextarea = document.getElementById("report-email-text");
+        const emailVal = emailTextarea?.value || "";
         if (!emailVal) {
           alert("No hay borrador para copiar.");
           return;
         }
+        const orig = btnCopyEmail.textContent;
         try {
-          await navigator.clipboard.writeText(emailVal);
-          const orig = btnCopyEmail.textContent;
-          btnCopyEmail.textContent = "¡Copiado al portapapeles!";
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(emailVal);
+          } else if (emailTextarea) {
+            emailTextarea.removeAttribute("readonly");
+            emailTextarea.select();
+            emailTextarea.setSelectionRange(0, emailVal.length);
+            document.execCommand("copy");
+            emailTextarea.setAttribute("readonly", "readonly");
+          }
+          btnCopyEmail.textContent = "¡Copiado!";
           setTimeout(() => {
             btnCopyEmail.textContent = orig;
-          }, 2500);
+          }, 2000);
         } catch (err) {
+          if (emailTextarea) {
+            try {
+              emailTextarea.removeAttribute("readonly");
+              emailTextarea.select();
+              emailTextarea.setSelectionRange(0, emailVal.length);
+              document.execCommand("copy");
+              emailTextarea.setAttribute("readonly", "readonly");
+              btnCopyEmail.textContent = "¡Copiado!";
+              setTimeout(() => {
+                btnCopyEmail.textContent = orig;
+              }, 2000);
+              return;
+            } catch (fallbackErr) {
+              console.warn("Fallback copy error:", fallbackErr);
+            }
+          }
           alert("No se pudo copiar automáticamente. Podés seleccionarlo de la caja de texto.");
         }
       });

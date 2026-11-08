@@ -72,6 +72,17 @@ class TestPaso5FrontendPwaAndRateLimiter(unittest.TestCase):
         )
         self.assertIn("max-h-[85vh]", resp_index.text)
         self.assertIn("overflow-y-auto", resp_index.text)
+        self.assertIn('<meta property="og:title" content="Dr. H Argentina - Asistente Legal">', resp_index.text)
+        self.assertIn(
+            '<meta property="og:description" content="Tu asistente legal en lenguaje claro. Subí tu expediente y entendelo en criollo.">',
+            resp_index.text,
+        )
+        self.assertIn('<meta property="og:url" content="https://dr-h-argentina.onrender.com">', resp_index.text)
+        self.assertIn('<meta property="og:type" content="website">', resp_index.text)
+        self.assertIn(
+            '<meta property="og:image" content="https://dr-h-argentina.onrender.com/icons/icon-512x512.png">',
+            resp_index.text,
+        )
         self.assertIn("Pack Micro-Consultas / Recargas: $4.000 ARS", resp_index.text)
         self.assertIn("Pase Mensual por Expediente: $20.000 ARS", resp_index.text)
         self.assertIn(
@@ -101,8 +112,14 @@ class TestPaso5FrontendPwaAndRateLimiter(unittest.TestCase):
         self.assertIn("/emergency-scan", resp_js.text)
         self.assertIn("/repository-consult", resp_js.text)
         self.assertIn("Analizando la documentación del caso...", resp_js.text)
+        self.assertIn("¡Copiado!", resp_js.text)
+        self.assertIn("navigator.clipboard.writeText", resp_js.text)
         self.assertNotIn("Analizando tu caso con Agente000 en memoria RAM...", resp_js.text)
         self.assertNotIn("loadDemoExample", resp_js.text)
+
+        resp_icon = client.get("/icons/icon-512x512.png")
+        self.assertEqual(resp_icon.status_code, 200)
+        self.assertEqual(resp_icon.headers.get("content-type"), "image/png")
 
         resp_sw = client.get("/sw.js")
         self.assertEqual(resp_sw.status_code, 200)

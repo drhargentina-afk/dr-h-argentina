@@ -61,19 +61,19 @@ class RepoCivil(BaseRepositoryConsultant):
     @property
     def criollo_to_law_map(self) -> dict[str, dict[str, str]]:
         return {
-            "choque|accidente de tránsito|accidente de transito|seguro|lesiones|latigazo cervical": {
-                "situation": "Accidente de tránsito con lesiones físicas o daños materiales al vehículo",
-                "law_article": "Arts. 1741, 1746 y 1757 del Código Civil y Comercial + Art. 68 Ley 24.449",
+            "alquiler|locación|desalojo|aumento de alquiler|depósito en garantía|rescisión|contrato": {
+                "situation": "Consulta contractual civil, locación o responsabilidad patrimonial",
+                "law_article": "Arts. 957 a 1226 y 1708 a 1780 del Código Civil y Comercial de la Nación",
                 "explanation": (
-                    "En un choque con lesiones se reclama contra el conductor, el titular registral del vehículo y su "
-                    "compañía de seguros citada en garantía (Art. 118 Ley 17.418). La indemnización por incapacidad "
-                    "se calcula mediante una fórmula matemática (Art. 1746 CCyCN) según tu edad, ingresos y puntos de incapacidad."
+                    "Para contratos firmados desde el 29/12/2023 rige el índice de actualización pactado en el contrato "
+                    "(habitualmente IPC del INDEC o ICL del BCRA) y el inquilino puede rescindir en cualquier momento "
+                    "abonando el 10% del saldo futuro del contrato (Art. 1221 CCyCN reformado)."
                 ),
                 "protection_tip": (
-                    "Si no podés pagar la tasa de justicia (3% en Nación/CABA o 2.2% en PBA), tu abogado debe iniciar "
-                    "simultáneamente el 'Beneficio de Litigar sin Gastos' (Art. 78 CPCCN), que es 100% gratuito."
+                    "Verificá siempre la fecha de firma de tu contrato: si fue firmado antes del 29/12/2023, sigue "
+                    "rigiendo hasta su vencimiento la ley vigente al día en que se firmó."
                 ),
-                "mirror_topic": "accidente_transito_danos",
+                "mirror_topic": "alquileres_y_desalojo",
             },
             "sucesión|sucesion|herencia|declaratoria de herederos|falleció mi papá|propiedad heredada": {
                 "situation": "Trámite sucesorio para transmitir bienes inmuebles, autos o cuentas bancarias",
@@ -89,19 +89,19 @@ class RepoCivil(BaseRepositoryConsultant):
                 ),
                 "mirror_topic": "sucesion_etapas",
             },
-            "alquiler|locación|desalojo|aumento de alquiler|depósito en garantía|rescisión": {
-                "situation": "Actualización de alquileres, rescisión anticipada o juicio de desalojo",
-                "law_article": "Arts. 1187 a 1226 del Código Civil y Comercial (texto vigente según DNU 70/2023)",
+            "choque|siniestro vial|poliza automotor|latigazo cervical": {
+                "situation": "Reclamo civil por daños materiales o responsabilidad extracontractual",
+                "law_article": "Arts. 1741, 1746 y 1757 del Código Civil y Comercial + Art. 68 Ley 24.449",
                 "explanation": (
-                    "Para contratos firmados desde el 29/12/2023 rige el índice de actualización pactado en el contrato "
-                    "(habitualmente IPC del INDEC o ICL del BCRA) y el inquilino puede rescindir en cualquier momento "
-                    "abonando el 10% del saldo futuro del contrato (Art. 1221 CCyCN reformado)."
+                    "En un reclamo de responsabilidad civil se acciona contra el responsable, el titular registral y su "
+                    "compañía aseguradora citada en garantía (Art. 118 Ley 17.418). La indemnización se determina conforme "
+                    "a las pautas del Art. 1746 del Código Civil y Comercial."
                 ),
                 "protection_tip": (
-                    "Verificá siempre la fecha de firma de tu contrato: si fue firmado antes del 29/12/2023, sigue "
-                    "rigiendo hasta su vencimiento la ley vigente al día en que se firmó."
+                    "Si no podés pagar la tasa de justicia (3% en Nación/CABA o 2.2% en PBA), tu abogado debe iniciar "
+                    "simultáneamente el 'Beneficio de Litigar sin Gastos' (Art. 78 CPCCN), que es 100% gratuito."
                 ),
-                "mirror_topic": "alquileres_y_desalojo",
+                "mirror_topic": "accidente_transito_danos",
             },
         }
 

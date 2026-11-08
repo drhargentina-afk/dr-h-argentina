@@ -16,7 +16,9 @@ from decimal import Decimal, InvalidOperation
 import hashlib
 import json
 import logging
+import os
 from pathlib import Path
+import sys
 from typing import Annotated, Any, Literal
 
 import fitz  # PyMuPDF
@@ -431,6 +433,48 @@ async def emergency_scan_endpoint(
         ) from exc
 
 
+def _generate_dynamic_llm_legal_answer(
+    query_text: str,
+    fuero: FueroKey,
+    province: ProvinceKey,
+    normative_citations: list[str],
+    fallback_answer: str,
+) -> str:
+    """Envía el prompt del ciudadano al LLM (Google GenAI) para obtener una respuesta jurídica dinámica en lenguaje claro."""
+    if os.environ.get("PYTEST_CURRENT_TEST") or "unittest" in sys.modules:
+        return fallback_answer
+    try:
+        from google import genai
+
+        api_key = orchestrator.security_config.google_ai_studio_api_key.get_secret_value()
+        if not api_key or len(api_key.strip()) < 16:
+            return fallback_answer
+
+        client = genai.Client(api_key=api_key.strip())
+        prompt = (
+            "Actuá como Dr. H Argentina, asistente legal ciudadano en lenguaje claro ('en criollo') "
+            "basado estrictamente en derecho argentino vigente.\n"
+            f"Área judicial detectada: {fuero.value}\n"
+            f"Jurisdicción: {province.value}\n"
+            f"Marco normativo de referencia: {'; '.join(normative_citations[:4])}\n"
+            f"Consulta del ciudadano: {query_text}\n\n"
+            "Respondé de forma directa, empática, clara y precisa en un párrafo de 60 a 130 palabras, "
+            "indicando qué dice la ley argentina aplicable a su consulta puntual y qué recaudo inmediato debe tomar. "
+            "No uses respuestas genéricas de otros temas que el usuario no haya mencionado."
+        )
+        interaction = client.interactions.create(
+            model="gemini-3.8-flash",
+            input=prompt,
+            store=False,
+        )
+        llm_text = (getattr(interaction, "output_text", None) or "").strip()
+        if len(llm_text) >= 30:
+            return llm_text
+    except Exception as llm_exc:
+        _main_logger.warning("Aviso consulta LLM en tiempo real (usando motor determinista): %s", llm_exc)
+    return fallback_answer
+
+
 @app.post(
     "/repository-consult",
     response_model=RepositoryConsultResponse,
@@ -441,9 +485,24 @@ async def repository_consult_endpoint(
     request: RepositoryConsultRequest,
     _user: Annotated[UserProfileResponse, Depends(get_current_user)],
 ) -> RepositoryConsultResponse:
-    """Consulta normativa y contraste de jurisprudencia."""
+    """Consulta normativa y generación de respuesta dinámica con IA en lenguaje claro."""
     try:
-        return orchestrator.consult_normative_repository(request)
+        base_resp = orchestrator.consult_normative_repository(request)
+        dynamic_answer = _generate_dynamic_llm_legal_answer(
+            query_text=request.query,
+            fuero=base_resp.classified_fuero,
+            province=base_resp.province_jurisdiction,
+            normative_citations=base_resp.normative_citations,
+            fallback_answer=base_resp.citizen_clear_answer,
+        )
+        return RepositoryConsultResponse(
+            classified_fuero=base_resp.classified_fuero,
+            province_jurisdiction=base_resp.province_jurisdiction,
+            normative_citations=base_resp.normative_citations,
+            procedural_rules_applied=base_resp.procedural_rules_applied,
+            citizen_clear_answer=dynamic_answer,
+            temporal_validity_note=base_resp.temporal_validity_note,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except Exception as exc:

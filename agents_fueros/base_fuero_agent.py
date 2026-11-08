@@ -150,9 +150,22 @@ class BaseRepositoryConsultant(ABC):
                 best_match_key = key
 
         if best_match_key is None:
-            # Tomar la primera entrada representativa del fuero como guía base
-            first_key = next(iter(self.criollo_to_law_map.keys()))
-            matched_data = self.criollo_to_law_map[first_key]
+            matched_data = {
+                "situation": f"Consulta ciudadana en área {self.fuero_key.value}",
+                "law_article": (
+                    self.current_normative_catalog[0]
+                    if self.current_normative_catalog
+                    else "Código Civil y Comercial y Legislación Nacional Vigente"
+                ),
+                "explanation": (
+                    f"Análisis de tu consulta ('{citizen_query[:180]}') conforme a la normativa argentina vigente "
+                    f"del fuero {self.fuero_key.value}."
+                ),
+                "protection_tip": (
+                    "Solicitá siempre copia íntegra de las actuaciones y verificá los plazos procesales antes de firmar cualquier escrito o acuerdo."
+                ),
+                "mirror_topic": "",
+            }
         else:
             matched_data = self.criollo_to_law_map[best_match_key]
 

@@ -188,11 +188,24 @@
     const userBadge = document.getElementById("user-session-badge");
     const btnLogout = document.getElementById("btn-logout");
     const paywallCard = document.getElementById("social-paywall-card");
+    const adminToolbar = document.getElementById("admin-toolbar");
 
     if (userProfile) {
       if (authContainer) authContainer.classList.add("hidden");
       if (loginSection) loginSection.classList.add("hidden");
       if (workspace) workspace.classList.remove("hidden");
+      if (adminToolbar) {
+        if (
+          typeof userProfile.email === "string" &&
+          userProfile.email.trim().toLowerCase() === "dr.h.argentina@gmail.com"
+        ) {
+          adminToolbar.classList.remove("hidden");
+          adminToolbar.style.display = "flex";
+        } else {
+          adminToolbar.classList.add("hidden");
+          adminToolbar.style.display = "none";
+        }
+      }
       if (userBadge) {
         const badgeLabel = userProfile.name || userProfile.email || "Usuario Activo";
         const quotaInfo = (userProfile.has_paid_pass || state.isSocialUnlocked)
@@ -221,6 +234,10 @@
       if (authContainer) authContainer.classList.remove("hidden");
       if (loginSection) loginSection.classList.remove("hidden");
       if (workspace) workspace.classList.add("hidden");
+      if (adminToolbar) {
+        adminToolbar.classList.add("hidden");
+        adminToolbar.style.display = "none";
+      }
       if (userBadge) {
         userBadge.textContent = "";
         userBadge.classList.add("hidden");
@@ -461,7 +478,10 @@
     const waText = document.getElementById("report-whatsapp-text");
     const emailText = document.getElementById("report-email-text");
 
-    if (reportSection) reportSection.classList.remove("hidden");
+    if (reportSection) {
+      reportSection.classList.remove("hidden");
+      reportSection.style.display = "block";
+    }
 
     const fueroReadable = humanizeFuero(report.fuero);
     if (fueroBadge) {
@@ -1161,22 +1181,66 @@
 
     if (btnPayMicro) {
       btnPayMicro.addEventListener("click", () => {
-        const targetUrl = state.microPaymentUrl || state.externalPaymentUrl || "https://dr-h-argentina.onrender.com/#payment-micro";
-        window.open(targetUrl, "_blank", "noopener,noreferrer");
+        const url_de_lemon = state.microPaymentUrl || state.externalPaymentUrl || "https://dr-h-argentina.onrender.com/#payment-micro";
+        window.location.href = url_de_lemon;
       });
     }
 
     if (btnPayMonthly) {
       btnPayMonthly.addEventListener("click", () => {
-        const targetUrl = state.monthlyPaymentUrl || state.externalPaymentUrl || "https://dr-h-argentina.onrender.com/#payment-monthly";
-        window.open(targetUrl, "_blank", "noopener,noreferrer");
+        const url_de_lemon = state.monthlyPaymentUrl || state.externalPaymentUrl || "https://dr-h-argentina.onrender.com/#payment-monthly";
+        window.location.href = url_de_lemon;
       });
     }
 
     if (btnPayExternal) {
       btnPayExternal.addEventListener("click", () => {
-        const targetUrl = state.monthlyPaymentUrl || state.externalPaymentUrl || "https://dr-h-argentina.onrender.com/#payment-monthly";
-        window.open(targetUrl, "_blank", "noopener,noreferrer");
+        const url_de_lemon = state.monthlyPaymentUrl || state.externalPaymentUrl || "https://dr-h-argentina.onrender.com/#payment-monthly";
+        window.location.href = url_de_lemon;
+      });
+    }
+  }
+
+  function initAdminToolbar() {
+    const btnAdminFree = document.getElementById("btn-admin-mode-free");
+    const btnAdminPremium = document.getElementById("btn-admin-mode-premium");
+    const paywallCard = document.getElementById("social-paywall-card");
+    const lockedAlert = document.getElementById("report-locked-alert");
+    const reportSection = document.getElementById("report-output-section");
+
+    if (btnAdminFree) {
+      btnAdminFree.addEventListener("click", (e) => {
+        e.preventDefault();
+        if (paywallCard) {
+          paywallCard.classList.remove("hidden");
+          paywallCard.style.display = "block";
+        }
+        if (lockedAlert) {
+          lockedAlert.classList.remove("hidden");
+          lockedAlert.style.display = "flex";
+        }
+        if (reportSection) {
+          reportSection.classList.add("hidden");
+          reportSection.style.display = "none";
+        }
+      });
+    }
+
+    if (btnAdminPremium) {
+      btnAdminPremium.addEventListener("click", (e) => {
+        e.preventDefault();
+        if (paywallCard) {
+          paywallCard.classList.add("hidden");
+          paywallCard.style.display = "none";
+        }
+        if (lockedAlert) {
+          lockedAlert.classList.add("hidden");
+          lockedAlert.style.display = "none";
+        }
+        if (reportSection) {
+          reportSection.classList.remove("hidden");
+          reportSection.style.display = "block";
+        }
       });
     }
   }
@@ -1280,6 +1344,7 @@
     initUnifiedInputControls();
     initActionButtons();
     initSocialPaywallAndExternalPayments();
+    initAdminToolbar();
     loadPaymentConfig();
 
     document.getElementById("btn-run-full-analysis")?.addEventListener("click", runUnifiedConsultation);

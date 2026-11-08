@@ -564,6 +564,19 @@
 
     <!-- ÁREA DE CONSULTA Y SEGUIMIENTO -->
     <div id="app-workspace" class="hidden" style="display:flex;flex-direction:column;gap:1.5rem;">
+      <!-- PANEL ADMIN (MODO DIOS): ARRANCA OCULTO -->
+      <div id="admin-toolbar" class="panel-card hidden" style="display:none;flex-direction:row;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.75rem;padding:0.85rem 1.15rem;border:2px dashed var(--accent-brand);background-color:var(--bg-elevated);" role="region" aria-label="Panel Administrador">
+        <strong style="font-size:0.92rem;">🛠️ Panel Admin (Modo Dios):</strong>
+        <div style="display:flex;align-items:center;gap:0.5rem;">
+          <button id="btn-admin-mode-free" type="button" class="btn btn-secondary" style="font-size:0.85rem;padding:0.4rem 0.9rem;">
+            Modo Gratis
+          </button>
+          <button id="btn-admin-mode-premium" type="button" class="btn btn-primary" style="font-size:0.85rem;padding:0.4rem 0.9rem;">
+            Modo Premium
+          </button>
+        </div>
+      </div>
+
       <!-- MURO DE PAGO SOCIAL Y ACCESO INTERNACIONAL (LEMON SQUEEZY) -->
       <section id="social-paywall-card" class="panel-card hidden" style="border:2px solid var(--accent-brand);">
         <div class="panel-header">

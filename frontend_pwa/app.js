@@ -525,7 +525,21 @@
   // 6. MOTOR DE CONSULTA INTEGRAL (CERO FUEROS - FILTRO SHA-256)
   // =========================================================================
 
-  async function runUnifiedConsultation() {
+  function runUnifiedConsultation() {
+    const fileInput = document.getElementById("pdf-file-input");
+    if (!state.currentPdfBlob && fileInput?.files?.[0]) {
+      const f = fileInput.files[0];
+      if (f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf")) {
+        state.currentPdfBlob = f;
+        state.currentPdfName = f.name;
+      } else {
+        state.attachedMediaName = f.name;
+      }
+    }
+    return executeUnifiedConsultation();
+  }
+
+  async function executeUnifiedConsultation() {
     const statusBanner = document.getElementById("consultation-state-banner");
     const verbalText = document.getElementById("input-verbal-statement")?.value.trim() || "";
     const paywallCard = document.getElementById("social-paywall-card");
@@ -543,7 +557,7 @@
     if (statusBanner) {
       statusBanner.className = "state-banner";
       statusBanner.classList.remove("hidden");
-      statusBanner.textContent = "Analizando tu caso con Agente000 en memoria RAM...";
+      statusBanner.textContent = "Analizando la documentación del caso...";
     }
 
     try {
@@ -1225,28 +1239,6 @@
     });
   }
 
-  async function loadDemoExample() {
-    const attachStatus = document.getElementById("attachment-status-text");
-    const verbalInput = document.getElementById("input-verbal-statement");
-    try {
-      const resp = await apiFetch("/demo-sample-pdf");
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const pdfBlob = await resp.blob();
-      state.currentPdfBlob = pdfBlob;
-      state.currentPdfName = "Ejemplo_Caso_Laboral.pdf";
-      if (verbalInput && !verbalInput.value.trim()) {
-        verbalInput.value =
-          "Mi abogado me dijo que ya pidió sentencia la semana pasada y me pide transferirle $45.000 para gastos y firmar un convenio de honorarios del 30%.";
-      }
-      if (attachStatus) {
-        attachStatus.textContent = "Archivo de ejemplo cargado: Ejemplo_Caso_Laboral.pdf";
-      }
-      await runUnifiedConsultation();
-    } catch (err) {
-      alert(`No se pudo cargar el archivo de ejemplo: ${err.message}`);
-    }
-  }
-
   function initServiceWorker() {
     if (!("serviceWorker" in navigator)) return;
     window.addEventListener("load", () => {
@@ -1281,7 +1273,6 @@
     initSocialPaywallAndExternalPayments();
     loadPaymentConfig();
 
-    document.getElementById("btn-demo-pdf")?.addEventListener("click", loadDemoExample);
     document.getElementById("btn-run-full-analysis")?.addEventListener("click", runUnifiedConsultation);
     document.getElementById("btn-refresh-cases")?.addEventListener("click", loadUserCases);
 

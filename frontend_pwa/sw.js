@@ -9,7 +9,7 @@
  *    /repository-consult, /cron-07am, /health) garantizando Zero-Storage de expedientes en caché.
  */
 
-const CACHE_NAME = "dr-h-argentina-pwa-v2.5.0";
+const CACHE_NAME = "dr-h-argentina-pwa-v2.6.0";
 const APP_SHELL_ASSETS = [
   "/",
   "/index.html",

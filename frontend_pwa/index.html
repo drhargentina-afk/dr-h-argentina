@@ -564,6 +564,25 @@
 
     <!-- ÁREA DE CONSULTA Y SEGUIMIENTO -->
     <div id="app-workspace" class="hidden" style="display:flex;flex-direction:column;gap:1.5rem;">
+      <!-- BARRA DE PESTAÑAS DE CONTROL DE ADMINISTRADOR (ARRANCA OCULTA) -->
+      <div id="admin-toolbar" class="panel-card hidden" style="display:none;flex-direction:row;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.75rem;padding:0.9rem 1.25rem;border:2px dashed var(--accent-brand);background-color:var(--bg-elevated);" role="region" aria-label="Control de Administrador">
+        <div style="display:flex;align-items:center;gap:0.5rem;">
+          <span style="font-size:1.1rem;">🛠️</span>
+          <div>
+            <strong style="font-size:0.94rem;display:block;">Panel de Simulación Administrador</strong>
+            <span id="admin-mode-status" style="font-size:0.8rem;color:var(--text-secondary);">Alterná entre vista bloqueada y desbloqueada para testear el flujo:</span>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:0.5rem;">
+          <button id="btn-admin-mode-free" type="button" class="btn btn-secondary" style="font-size:0.86rem;padding:0.45rem 0.95rem;">
+            🔒 Modo Gratis
+          </button>
+          <button id="btn-admin-mode-premium" type="button" class="btn btn-primary" style="font-size:0.86rem;padding:0.45rem 0.95rem;">
+            ⭐ Modo Premium
+          </button>
+        </div>
+      </div>
+
       <!-- MURO DE PAGO SOCIAL Y ACCESO INTERNACIONAL (LEMON SQUEEZY) -->
       <section id="social-paywall-card" class="panel-card hidden" style="border:2px solid var(--accent-brand);">
         <div class="panel-header">
@@ -712,46 +731,49 @@
             </button>
           </div>
 
-          <!-- Semáforo de Urgencia -->
-          <div id="do-not-sign-banner" class="urgency-banner safe" role="alert">
-            <span id="do-not-sign-title">Podés avanzar</span>
-            <span id="do-not-sign-text" style="font-weight:500;font-size:0.93rem;"></span>
-          </div>
-
-          <!-- Explicación en criollo -->
-          <article class="panel-card" style="box-shadow:none;border-color:var(--border-subtle);">
-            <h3>Explicación de tu caso en criollo</h3>
-            <p id="report-plain-summary" style="font-size:0.95rem;"></p>
-            <p id="report-audit-section" style="font-size:0.9rem;color:var(--text-secondary);margin-top:0.5rem;"></p>
-
-            <div id="report-questions-wrap" class="hidden" style="margin-top:0.5rem;">
-              <h4 style="font-size:0.9rem;margin-bottom:0.35rem;">Preguntas técnicas sugeridas para tu abogado:</h4>
-              <ul id="report-questions-list" style="padding-left:1.25rem;font-size:0.9rem;display:flex;flex-direction:column;gap:0.3rem;"></ul>
+          <!-- Cuerpo detallado del informe (se oculta en Modo Gratis / Bloqueado y se muestra en Modo Premium / Desbloqueado) -->
+          <div id="report-details-body" style="display:flex;flex-direction:column;gap:1.15rem;">
+            <!-- Semáforo de Urgencia -->
+            <div id="do-not-sign-banner" class="urgency-banner safe" role="alert">
+              <span id="do-not-sign-title">Podés avanzar</span>
+              <span id="do-not-sign-text" style="font-weight:500;font-size:0.93rem;"></span>
             </div>
-          </article>
 
-          <!-- TRES BOTONES DE ACCIÓN INMEDIATA -->
-          <div class="action-buttons-bar">
-            <button id="btn-download-pdf" type="button" class="btn btn-success">
-              📄 Descargar Informe Completo (PDF)
-            </button>
-            <button id="btn-open-whatsapp" type="button" class="btn btn-primary">
-              💬 Enviar por WhatsApp al Abogado
-            </button>
-            <button id="btn-copy-email" type="button" class="btn btn-secondary">
-              ✉️ Copiar borrador para Email
-            </button>
-          </div>
+            <!-- Explicación en criollo -->
+            <article class="panel-card" style="box-shadow:none;border-color:var(--border-subtle);">
+              <h3>Explicación de tu caso en criollo</h3>
+              <p id="report-plain-summary" style="font-size:0.95rem;"></p>
+              <p id="report-audit-section" style="font-size:0.9rem;color:var(--text-secondary);margin-top:0.5rem;"></p>
 
-          <!-- Vistas previas editables / copiables -->
-          <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(280px, 1fr));gap:1rem;">
-            <div class="panel-card" style="box-shadow:none;">
-              <h4 style="font-size:0.88rem;">Texto para WhatsApp:</h4>
-              <textarea id="report-whatsapp-text" autocomplete="off" readonly style="min-height:90px;font-size:0.85rem;"></textarea>
+              <div id="report-questions-wrap" class="hidden" style="margin-top:0.5rem;">
+                <h4 style="font-size:0.9rem;margin-bottom:0.35rem;">Preguntas técnicas sugeridas para tu abogado:</h4>
+                <ul id="report-questions-list" style="padding-left:1.25rem;font-size:0.9rem;display:flex;flex-direction:column;gap:0.3rem;"></ul>
+              </div>
+            </article>
+
+            <!-- TRES BOTONES DE ACCIÓN INMEDIATA -->
+            <div class="action-buttons-bar">
+              <button id="btn-download-pdf" type="button" class="btn btn-success">
+                📄 Descargar Informe Completo (PDF)
+              </button>
+              <button id="btn-open-whatsapp" type="button" class="btn btn-primary">
+                💬 Enviar por WhatsApp al Abogado
+              </button>
+              <button id="btn-copy-email" type="button" class="btn btn-secondary">
+                ✉️ Copiar borrador para Email
+              </button>
             </div>
-            <div class="panel-card" style="box-shadow:none;">
-              <h4 style="font-size:0.88rem;">Borrador para Email:</h4>
-              <textarea id="report-email-text" autocomplete="off" readonly style="min-height:90px;font-size:0.85rem;"></textarea>
+
+            <!-- Vistas previas editables / copiables -->
+            <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(280px, 1fr));gap:1rem;">
+              <div class="panel-card" style="box-shadow:none;">
+                <h4 style="font-size:0.88rem;">Texto para WhatsApp:</h4>
+                <textarea id="report-whatsapp-text" autocomplete="off" readonly style="min-height:90px;font-size:0.85rem;"></textarea>
+              </div>
+              <div class="panel-card" style="box-shadow:none;">
+                <h4 style="font-size:0.88rem;">Borrador para Email:</h4>
+                <textarea id="report-email-text" autocomplete="off" readonly style="min-height:90px;font-size:0.85rem;"></textarea>
+              </div>
             </div>
           </div>
         </div>

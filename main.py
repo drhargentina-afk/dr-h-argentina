@@ -758,6 +758,7 @@ async def payments_config_endpoint() -> PaymentConfigResponse:
 
 
 @app.post("/payments/checkout", response_model=CheckoutRedirectResponse, tags=["Monetización Dual"])
+@app.post("/payments/create-preference", response_model=CheckoutRedirectResponse, tags=["Monetización Dual"])
 async def payments_checkout_endpoint(req: CheckoutRedirectRequest) -> CheckoutRedirectResponse:
     """Obtiene el init_point de checkout según el plan seleccionado (MICRO o MONTHLY)."""
     cfg = orchestrator.security_config

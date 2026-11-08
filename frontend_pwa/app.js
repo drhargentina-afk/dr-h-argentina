@@ -37,6 +37,7 @@
     lastFinalReport: null,
     casesList: [],
     isSocialUnlocked: false,
+    adminSimulatedMode: null,
     microPaymentUrl: "https://dr-h-argentina.onrender.com/#payment-micro",
     monthlyPaymentUrl: "https://dr-h-argentina.onrender.com/#payment-monthly",
     externalPaymentUrl: "https://dr-h-argentina.onrender.com/#payment-monthly",
@@ -173,11 +174,79 @@
   }
 
   function isDeliverablesLocked() {
+    if (state.adminSimulatedMode === "FREE") return true;
+    if (state.adminSimulatedMode === "PREMIUM") return false;
     if (!state.currentUser) return false;
     if (state.currentUser.is_admin || state.currentUser.has_paid_pass || state.isSocialUnlocked) {
       return false;
     }
     return !state.currentUser.can_consult_free || state.currentUser.free_consultations_used >= 1;
+  }
+
+  function applyPaywallVisualState() {
+    const paywallCard = document.getElementById("social-paywall-card");
+    const lockedAlert = document.getElementById("report-locked-alert");
+    const reportDetailsBody = document.getElementById("report-details-body");
+    const reportSection = document.getElementById("report-output-section");
+    const btnAdminFree = document.getElementById("btn-admin-mode-free");
+    const btnAdminPremium = document.getElementById("btn-admin-mode-premium");
+    const adminStatus = document.getElementById("admin-mode-status");
+    const btnDownloadPdf = document.getElementById("btn-download-pdf");
+
+    const locked = isDeliverablesLocked();
+
+    if (locked) {
+      if (paywallCard) {
+        paywallCard.classList.remove("hidden");
+        paywallCard.style.display = "flex";
+      }
+      if (lockedAlert) {
+        lockedAlert.classList.remove("hidden");
+        lockedAlert.style.display = "flex";
+      }
+      if (reportDetailsBody) {
+        reportDetailsBody.classList.add("hidden");
+        reportDetailsBody.style.display = "none";
+      }
+      if (btnDownloadPdf) {
+        btnDownloadPdf.disabled = true;
+      }
+    } else {
+      if (paywallCard) {
+        paywallCard.classList.add("hidden");
+        paywallCard.style.display = "none";
+      }
+      if (lockedAlert) {
+        lockedAlert.classList.add("hidden");
+        lockedAlert.style.display = "none";
+      }
+      if (reportDetailsBody) {
+        reportDetailsBody.classList.remove("hidden");
+        reportDetailsBody.style.display = "flex";
+      }
+      if (btnDownloadPdf) {
+        btnDownloadPdf.disabled = false;
+      }
+      if (state.lastFinalReport && reportSection) {
+        reportSection.classList.remove("hidden");
+      }
+    }
+
+    if (btnAdminFree && btnAdminPremium) {
+      if (locked) {
+        btnAdminFree.className = "btn btn-primary";
+        btnAdminPremium.className = "btn btn-secondary";
+        if (adminStatus) {
+          adminStatus.textContent = "Estado actual: Modo Gratis activo (Paywall visible e informe detallado bloqueado).";
+        }
+      } else {
+        btnAdminFree.className = "btn btn-secondary";
+        btnAdminPremium.className = "btn btn-primary";
+        if (adminStatus) {
+          adminStatus.textContent = "Estado actual: Modo Premium activo (Paywall oculto, informe completo y descarga PDF habilitada).";
+        }
+      }
+    }
   }
 
   function setLoggedInView(userProfile) {
@@ -188,32 +257,44 @@
     const userBadge = document.getElementById("user-session-badge");
     const btnLogout = document.getElementById("btn-logout");
     const paywallCard = document.getElementById("social-paywall-card");
+    const adminToolbar = document.getElementById("admin-toolbar");
 
     if (userProfile) {
       if (authContainer) authContainer.classList.add("hidden");
       if (loginSection) loginSection.classList.add("hidden");
       if (workspace) workspace.classList.remove("hidden");
+
+      const isOfficialAdmin =
+        userProfile.is_admin === true ||
+        (typeof userProfile.email === "string" &&
+          userProfile.email.trim().toLowerCase() === "dr.h.argentina@gmail.com");
+
+      if (adminToolbar) {
+        if (isOfficialAdmin) {
+          adminToolbar.classList.remove("hidden");
+          adminToolbar.style.display = "flex";
+        } else {
+          adminToolbar.classList.add("hidden");
+          adminToolbar.style.display = "none";
+        }
+      }
+
       if (userBadge) {
         const badgeLabel = userProfile.name || userProfile.email || "Usuario Activo";
-        const quotaInfo = (userProfile.has_paid_pass || state.isSocialUnlocked)
-          ? " (Pase Completo / Social)"
-          : userProfile.can_consult_free
-          ? " (1 Consulta Gratis)"
-          : " (Consulta Usada)";
+        const quotaInfo =
+          state.adminSimulatedMode === "FREE"
+            ? " (Simulación: Modo Gratis)"
+            : state.adminSimulatedMode === "PREMIUM" || userProfile.has_paid_pass || state.isSocialUnlocked
+            ? " (Pase Completo / Premium)"
+            : userProfile.can_consult_free
+            ? " (1 Consulta Gratis)"
+            : " (Consulta Usada)";
         userBadge.textContent = `👤 ${badgeLabel}${quotaInfo}`;
         userBadge.classList.remove("hidden");
       }
       if (btnLogout) btnLogout.classList.remove("hidden");
 
-      // Si consumió la prueba gratuita y no tiene pase activo, mostrar el muro social y alerta de bloqueo
-      const lockedAlert = document.getElementById("report-locked-alert");
-      if (isDeliverablesLocked()) {
-        if (paywallCard) paywallCard.classList.remove("hidden");
-        if (lockedAlert) lockedAlert.classList.remove("hidden");
-      } else {
-        if (paywallCard) paywallCard.classList.add("hidden");
-        if (lockedAlert) lockedAlert.classList.add("hidden");
-      }
+      applyPaywallVisualState();
 
       // Cargar causas del usuario
       loadUserCases();
@@ -221,12 +302,19 @@
       if (authContainer) authContainer.classList.remove("hidden");
       if (loginSection) loginSection.classList.remove("hidden");
       if (workspace) workspace.classList.add("hidden");
+      if (adminToolbar) {
+        adminToolbar.classList.add("hidden");
+        adminToolbar.style.display = "none";
+      }
       if (userBadge) {
         userBadge.textContent = "";
         userBadge.classList.add("hidden");
       }
       if (btnLogout) btnLogout.classList.add("hidden");
-      if (paywallCard) paywallCard.classList.add("hidden");
+      if (paywallCard) {
+        paywallCard.classList.add("hidden");
+        paywallCard.style.display = "none";
+      }
     }
   }
 
@@ -516,6 +604,8 @@
     if (emailText) {
       emailText.value = buildFormalEmailText(report, fueroReadable);
     }
+
+    applyPaywallVisualState();
 
     // Scroll suave hacia los resultados
     reportSection?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -1125,18 +1215,27 @@
 
       // Desbloquear siempre en cliente tras completar la acción de difusión
       state.isSocialUnlocked = true;
+      state.adminSimulatedMode = "PREMIUM";
       if (state.currentUser) {
         state.currentUser.has_paid_pass = true;
         state.currentUser.can_consult_free = true;
       }
 
-      const paywallCard = document.getElementById("social-paywall-card");
-      const lockedAlert = document.getElementById("report-locked-alert");
-      const reportSection = document.getElementById("report-output-section");
-
-      if (paywallCard) paywallCard.classList.add("hidden");
-      if (lockedAlert) lockedAlert.classList.add("hidden");
+      applyPaywallVisualState();
       setLoggedInView(state.currentUser);
+
+      const reportSection = document.getElementById("report-output-section");
+      const reportDetailsBody = document.getElementById("report-details-body");
+      if (reportDetailsBody) {
+        reportDetailsBody.classList.remove("hidden");
+        reportDetailsBody.style.display = "flex";
+      }
+
+      if (statusBox) {
+        statusBox.className = "state-banner success";
+        statusBox.classList.remove("hidden");
+        statusBox.textContent = `¡Informe desbloqueado con éxito tras difundir en ${formatNetworkLabel(network)}!`;
+      }
 
       // Si había un informe ya generado en pantalla, mostrarlo completo y disparar su descarga
       if (state.lastFinalReport) {
@@ -1191,8 +1290,7 @@
           window.open(shareUrl, "_blank", "noopener,noreferrer");
         }
 
-        // Si el navegador soporta Web Share API nativa o fallback de portapapeles
-        if (navigator.share && network === "native") {
+        if (navigator.share && (network === "native" || !shareUrl)) {
           await navigator
             .share({
               title: "Dr. H Argentina - Asistente Legal",
@@ -1206,11 +1304,13 @@
               }
               await completeSocialUnlockAndAdvance(network);
             });
+        } else if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard
+            .writeText(`${shareText} ${targetAppUrl}`)
+            .then(() => completeSocialUnlockAndAdvance(network))
+            .catch(() => completeSocialUnlockAndAdvance(network));
         } else {
-          if (navigator.clipboard && navigator.clipboard.writeText) {
-            await navigator.clipboard.writeText(`${shareText} ${targetAppUrl}`).catch(() => {});
-          }
-          await completeSocialUnlockAndAdvance(network);
+          await Promise.resolve().then(() => completeSocialUnlockAndAdvance(network));
         }
       } finally {
         allShareButtons.forEach((b) => {
@@ -1308,6 +1408,40 @@
 
     if (btnPayExternal) {
       btnPayExternal.addEventListener("click", () => handleMonetaryPaymentClick("MONTHLY", btnPayExternal));
+    }
+  }
+
+  // =========================================================================
+  // 9.B PANEL DE CONTROL DE ADMINISTRADOR (MODO GRATIS / MODO PREMIUM)
+  // =========================================================================
+
+  function initAdminToolbar() {
+    const btnAdminFree = document.getElementById("btn-admin-mode-free");
+    const btnAdminPremium = document.getElementById("btn-admin-mode-premium");
+
+    if (btnAdminFree) {
+      btnAdminFree.addEventListener("click", () => {
+        state.adminSimulatedMode = "FREE";
+        state.isSocialUnlocked = false;
+        applyPaywallVisualState();
+        setLoggedInView(state.currentUser);
+        const paywallCard = document.getElementById("social-paywall-card");
+        paywallCard?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    }
+
+    if (btnAdminPremium) {
+      btnAdminPremium.addEventListener("click", () => {
+        state.adminSimulatedMode = "PREMIUM";
+        state.isSocialUnlocked = true;
+        applyPaywallVisualState();
+        setLoggedInView(state.currentUser);
+        const reportSection = document.getElementById("report-output-section");
+        if (reportSection) {
+          reportSection.classList.remove("hidden");
+          reportSection.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+      });
     }
   }
 
@@ -1410,6 +1544,7 @@
     initUnifiedInputControls();
     initActionButtons();
     initSocialPaywallAndExternalPayments();
+    initAdminToolbar();
     loadPaymentConfig();
 
     document.getElementById("btn-run-full-analysis")?.addEventListener("click", runUnifiedConsultation);

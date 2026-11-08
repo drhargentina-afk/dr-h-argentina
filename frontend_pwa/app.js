@@ -560,8 +560,17 @@
     return executeUnifiedConsultation();
   }
 
+  const LOADING_STATUS_SEQUENCE = [
+    "Analizando la documentación del caso...",
+    "Revisando jurisprudencia aplicable...",
+    "Redactando el informe final. Esto puede demorar un poco..."
+  ];
+  const CONSULTATION_TIMEOUT_MS = 120000;
+  const BUSY_SERVER_MESSAGE = "El servidor está muy ocupado, intentá de nuevo en unos segundos";
+
   async function executeUnifiedConsultation() {
     const statusBanner = document.getElementById("consultation-state-banner");
+    const btnConsult = document.getElementById("btn-run-full-analysis");
     const verbalText = document.getElementById("input-verbal-statement")?.value.trim() || "";
     const selectedProvince = document.getElementById("select-province-jurisdiction")?.value || "PJN_NACION_CABA";
     const cityLocality = document.getElementById("input-city-locality")?.value.trim() || "";
@@ -577,11 +586,34 @@
       return;
     }
 
+    const originalBtnText = btnConsult ? btnConsult.textContent : "Consultar a Dr. H";
+    if (btnConsult) {
+      btnConsult.disabled = true;
+      btnConsult.textContent = "Procesando consulta...";
+    }
+
+    let stepIndex = 0;
     if (statusBanner) {
       statusBanner.className = "state-banner";
       statusBanner.classList.remove("hidden");
-      statusBanner.textContent = "Analizando la documentación del caso...";
+      statusBanner.textContent = LOADING_STATUS_SEQUENCE[0];
     }
+
+    const loadingIntervalId = setInterval(() => {
+      if (stepIndex < LOADING_STATUS_SEQUENCE.length - 1) {
+        stepIndex += 1;
+        if (statusBanner) {
+          statusBanner.textContent = LOADING_STATUS_SEQUENCE[stepIndex];
+        }
+      }
+    }, 10000);
+
+    const abortController = new AbortController();
+    let didTimeout = false;
+    const timeoutId = setTimeout(() => {
+      didTimeout = true;
+      abortController.abort();
+    }, CONSULTATION_TIMEOUT_MS);
 
     try {
       if (state.currentPdfBlob) {
@@ -597,12 +629,15 @@
 
         const resp = await apiFetch("/analyze-expediente", {
           method: "POST",
-          body: formData
+          body: formData,
+          signal: abortController.signal
         });
 
         if (resp.status === 403) {
           const errData = await resp.json().catch(() => ({}));
-          throw new Error(errData.detail || "Este documento ya fue procesado bajo una prueba gratuita");
+          const err403 = new Error(errData.detail || "Este documento ya fue procesado bajo una prueba gratuita");
+          err403.isUserFacing = true;
+          throw err403;
         }
 
         if (resp.status === 402) {
@@ -611,12 +646,16 @@
             paywallCard.scrollIntoView({ behavior: "smooth", block: "start" });
           }
           const errData = await resp.json().catch(() => ({}));
-          throw new Error(errData.detail || "Ya utilizaste tu consulta gratuita de prueba. Desbloqueá tu acceso compartiendo en redes o con el pase internacional.");
+          const err402 = new Error(
+            errData.detail ||
+              "Ya utilizaste tu consulta gratuita de prueba. Desbloqueá tu acceso compartiendo en redes o con el pase internacional."
+          );
+          err402.isUserFacing = true;
+          throw err402;
         }
 
         if (!resp.ok) {
-          const errData = await resp.json().catch(() => ({ detail: "Error procesando el expediente." }));
-          throw new Error(errData.detail || `HTTP ${resp.status}`);
+          throw new Error(BUSY_SERVER_MESSAGE);
         }
 
         const report = await resp.json();
@@ -634,6 +673,7 @@
           apiFetch("/emergency-scan", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
+            signal: abortController.signal,
             body: JSON.stringify({
               document_text: queryText.length >= 10 ? queryText : `${queryText} — revisión preventiva`,
               province_jurisdiction: selectedProvince,
@@ -644,6 +684,7 @@
           apiFetch("/repository-consult", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
+            signal: abortController.signal,
             body: JSON.stringify({
               query: queryText,
               province_jurisdiction: selectedProvince,
@@ -653,7 +694,7 @@
         ]);
 
         if (!scanResp.ok || !repoResp.ok) {
-          throw new Error("No se pudo completar la consulta en este momento.");
+          throw new Error(BUSY_SERVER_MESSAGE);
         }
 
         const scanData = await scanResp.json();
@@ -722,7 +763,21 @@
       if (statusBanner) {
         statusBanner.className = "state-banner error";
         statusBanner.classList.remove("hidden");
-        statusBanner.textContent = `Aviso: ${err.message}`;
+        const isAbortOrServerError =
+          didTimeout ||
+          (err && err.name === "AbortError") ||
+          !err ||
+          !err.isUserFacing;
+        statusBanner.textContent = isAbortOrServerError
+          ? BUSY_SERVER_MESSAGE
+          : `Aviso: ${err.message}`;
+      }
+    } finally {
+      clearInterval(loadingIntervalId);
+      clearTimeout(timeoutId);
+      if (btnConsult) {
+        btnConsult.disabled = false;
+        btnConsult.textContent = originalBtnText;
       }
     }
   }

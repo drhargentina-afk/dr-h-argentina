@@ -180,9 +180,11 @@ class TestPaymentSocialAndExternal(unittest.TestCase):
         self.assertIn("eje.juscaba.gob.ar", html_text)
         self.assertIn("Mesa de Entradas", html_text)
 
-        # Autenticación Google fluida sin bloqueos
-        self.assertIn('id="input-google-email"', html_text)
-        self.assertIn('id="btn-continue-google"', html_text)
+        # Autenticación Google oficial GIS sin campos manuales duplicados
+        self.assertIn('id="g_id_onload"', html_text)
+        self.assertIn('class="g_id_signin"', html_text)
+        self.assertNotIn('id="input-google-email"', html_text)
+        self.assertNotIn('id="btn-continue-google"', html_text)
         self.assertIn('id="report-locked-alert"', html_text)
 
         # Eliminación total de Mercado Pago en HTML y JS

@@ -234,41 +234,32 @@
   // 3. AUTENTICACIÓN GOOGLE OAUTH 2.0 (VALIDACIÓN REAL DE JWT CON GIS)
   // =========================================================================
 
-  function submitGoogleCredential(credentialResponse) {
-    const emailInput = document.getElementById('input-google-email');
-    const authContainer = document.getElementById('auth-container');
-    const workspace = document.getElementById('app-workspace');
-
-    if (!emailInput || !emailInput.value.includes('@')) {
-        alert("Por favor, ingresá un correo válido de Google para continuar.");
-        return; // Bloquea acceso falso
-    }
-
-    // Si el correo es válido, avanzar
-    if (authContainer) authContainer.classList.add('hidden');
-    if (workspace) workspace.classList.remove('hidden');
-}
-
   function logout() {
-    // Limpiar correo al salir
-    const emailInput = document.getElementById('input-google-email');
-    if (emailInput) emailInput.value = '';
-    
     const authContainer = document.getElementById('auth-container');
     const workspace = document.getElementById('app-workspace');
     
     if (workspace) workspace.classList.add('hidden');
     if (authContainer) authContainer.classList.remove('hidden');
-}
+  }
 
   async function syncBackendGoogleSession(credentialToken) {
+    if (!credentialToken || typeof credentialToken !== "string" || !credentialToken.trim()) {
+      setLoggedInView(null);
+      showLoginFeedback("No se recibió una credencial válida de Google.", "error");
+      return;
+    }
+
+    showLoginFeedback("Validando sesión con Google...", "info");
     try {
       const resp = await fetch("/auth/google", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ credential: credentialToken })
+        body: JSON.stringify({ credential: credentialToken.trim() })
       });
-      if (!resp.ok) return;
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({ detail: "Error autenticando con Google." }));
+        throw new Error(err.detail || "No se pudo verificar la credencial de Google.");
+      }
       const data = await resp.json();
       if (data && data.access_token && data.user) {
         storeSessionToken(data.access_token);
@@ -276,14 +267,24 @@
         setLoggedInView(data.user);
       }
     } catch (err) {
-      console.warn("Sincronización de sesión Google:", err);
+      storeSessionToken(null);
+      setLoggedInView(null);
+      showLoginFeedback(err.message || "Error al iniciar sesión con Google.", "error");
     }
   }
 
+  // Exponer callback global para el contenedor declarativo #g_id_onload de GIS
+  window.handleGoogleCredentialResponse = async function (response) {
+    if (response && response.credential) {
+      await syncBackendGoogleSession(response.credential);
+    } else {
+      setLoggedInView(null);
+      showLoginFeedback("No se recibió credencial desde Google Identity Services.", "error");
+    }
+  };
+
   function initGoogleOAuth() {
-    const btnContinue = document.getElementById("btn-continue-google");
     const container = document.getElementById("google-signin-btn-container");
-    const loginForm = document.getElementById("google-login-form");
     const metaClientId = document.querySelector('meta[name="google-signin-client_id"]');
     const googleClientId =
       (metaClientId && metaClientId.getAttribute("content") && metaClientId.getAttribute("content").trim()) ||
@@ -295,15 +296,7 @@
         try {
           window.google.accounts.id.initialize({
             client_id: googleClientId,
-            callback: async (res) => {
-              if (res && res.credential) {
-                const authContainer = document.getElementById("auth-container");
-                const workspace = document.getElementById("app-workspace");
-                if (authContainer) authContainer.classList.add("hidden");
-                if (workspace) workspace.classList.remove("hidden");
-                await syncBackendGoogleSession(res.credential);
-              }
-            }
+            callback: window.handleGoogleCredentialResponse
           });
           if (container) {
             container.innerHTML = "";
@@ -322,28 +315,6 @@
 
     setupGIS();
     window.addEventListener("load", setupGIS);
-
-    if (btnContinue) {
-      btnContinue.addEventListener("click", async (ev) => {
-        ev.preventDefault();
-        submitGoogleCredential();
-
-        const emailInput = document.getElementById("input-google-email");
-        if (emailInput && emailInput.value.includes("@")) {
-          const emailVal = emailInput.value.trim().toLowerCase();
-          const btnLogout = document.getElementById("btn-logout");
-          if (btnLogout) btnLogout.classList.remove("hidden");
-          await syncBackendGoogleSession(`mock_google_oauth:${emailVal}:Ciudadano`);
-        }
-      });
-    }
-
-    if (loginForm) {
-      loginForm.addEventListener("submit", (ev) => {
-        ev.preventDefault();
-        btnContinue?.click();
-      });
-    }
 
     const btnLogout = document.getElementById("btn-logout");
     if (btnLogout) {

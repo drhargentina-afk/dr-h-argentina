@@ -68,6 +68,23 @@ class TestMvpRefactorRoadmap(unittest.TestCase):
         resp_me_after = self.client.get("/auth/me", headers=bearer_header)
         self.assertEqual(resp_me_after.status_code, 401)
 
+        # 4. Verificar que dr.h.argentina@gmail.com sea el único usuario con privilegios de administrador
+        resp_admin = self.client.post(
+            "/auth/google",
+            json={"credential": "mock_google_oauth:dr.h.argentina@gmail.com:Admin Dr H"},
+        )
+        self.assertEqual(resp_admin.status_code, 200)
+        admin_user = resp_admin.json()["user"]
+        self.assertTrue(admin_user["is_admin"])
+        self.assertTrue(admin_user["has_paid_pass"])
+
+        resp_fake_admin = self.client.post(
+            "/auth/google",
+            json={"credential": "mock_google_oauth:admin@gmail.com:Otro Usuario"},
+        )
+        self.assertEqual(resp_fake_admin.status_code, 200)
+        self.assertFalse(resp_fake_admin.json()["user"]["is_admin"])
+
     def test_cryptographic_sha256_anti_abuse_filter(self) -> None:
         """Verifica que si un documento ya fue procesado gratis, otro usuario reciba HTTP 403."""
         u_tag = uuid.uuid4().hex[:8]

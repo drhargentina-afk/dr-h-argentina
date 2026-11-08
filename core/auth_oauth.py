@@ -19,7 +19,7 @@ from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token
 from pydantic import BaseModel, ConfigDict, Field
 
-from core.config import ServerSecurityConfig
+from core.config import OFFICIAL_ADMIN_EMAIL, ServerSecurityConfig
 from core.database import DrHDatabase
 
 _logger = logging.getLogger("dr_h.auth_oauth")
@@ -136,10 +136,10 @@ class GoogleOAuthManager:
         now = datetime.now(timezone.utc)
         expires = now + timedelta(hours=self.config.admin_session_ttl_hours * 2)
 
-        is_admin = False
-        admin_email = getattr(self.config, "admin_user", "admin").lower()
-        if email == admin_email or email.startswith("admin@"):
-            is_admin = True
+        is_admin = email == OFFICIAL_ADMIN_EMAIL.lower()
+        if is_admin:
+            self.db.set_user_paid_pass(email, True)
+            user_row = self.db.get_user_by_email(email) or user_row
 
         self.db.create_session(
             token=token,
@@ -149,8 +149,8 @@ class GoogleOAuthManager:
         )
 
         free_used = int(user_row["free_consultations_used"])
-        has_paid = int(user_row["has_paid_pass"]) == 1
-        can_free = (free_used == 0) and not has_paid
+        has_paid = is_admin or (int(user_row["has_paid_pass"]) == 1)
+        can_free = is_admin or ((free_used == 0) and not has_paid)
 
         msg = (
             "Bienvenido/a a Dr. H Argentina. Tenés 1 consulta gratuita disponible."
@@ -189,9 +189,9 @@ class GoogleOAuthManager:
             raise PermissionError("Usuario no encontrado en la base de datos.")
 
         free_used = int(user["free_consultations_used"])
-        has_paid = int(user["has_paid_pass"]) == 1
-        can_free = (free_used == 0) and not has_paid
-        is_admin = int(sess["is_admin"]) == 1
+        is_admin = email.lower() == OFFICIAL_ADMIN_EMAIL.lower()
+        has_paid = is_admin or (int(user["has_paid_pass"]) == 1)
+        can_free = is_admin or ((free_used == 0) and not has_paid)
 
         return UserProfileResponse(
             email=email,

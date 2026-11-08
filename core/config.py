@@ -23,7 +23,8 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 _logger = logging.getLogger("dr_h.config")
 
-DEFAULT_ADMIN_USER = "admin"
+DEFAULT_ADMIN_USER = "dr.h.argentina@gmail.com"
+OFFICIAL_ADMIN_EMAIL = "dr.h.argentina@gmail.com"
 MIN_ADMIN_PASSWORD_LENGTH = 12
 
 
@@ -80,6 +81,10 @@ class ServerSecurityConfig(BaseModel):
         min_length=3,
         max_length=64,
         description="Usuario Administrador exclusivo (ADMIN_USER).",
+    )
+    admin_email: str = Field(
+        default=OFFICIAL_ADMIN_EMAIL,
+        description="Correo oficial único con privilegios de administrador en Google OAuth.",
     )
     admin_password: SecretStr = Field(
         ...,
@@ -156,6 +161,7 @@ class ServerSecurityConfig(BaseModel):
         return cls(
             google_ai_studio_api_key=SecretStr(raw_key.strip()),
             admin_user=_get("ADMIN_USER", DEFAULT_ADMIN_USER).strip(),
+            admin_email=OFFICIAL_ADMIN_EMAIL,
             admin_password=_resolve_admin_password(_get("ADMIN_PASSWORD", "")),
             admin_session_ttl_hours=ttl_hours,
             google_client_id=_get(

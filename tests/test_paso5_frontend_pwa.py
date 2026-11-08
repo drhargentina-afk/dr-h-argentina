@@ -42,8 +42,10 @@ class TestPaso5FrontendPwaAndRateLimiter(unittest.TestCase):
         self.assertIn("Dr. H Argentina", resp_index.text)
         self.assertIn('meta name="color-scheme" content="light dark"', resp_index.text)
         self.assertIn('id="login-section"', resp_index.text)
-        self.assertIn('id="btn-continue-google"', resp_index.text)
-        self.assertIn("Continuar con Google", resp_index.text)
+        self.assertIn('id="g_id_onload"', resp_index.text)
+        self.assertIn('class="g_id_signin"', resp_index.text)
+        self.assertNotIn('id="input-google-email"', resp_index.text)
+        self.assertNotIn('id="btn-continue-google"', resp_index.text)
         self.assertIn('id="btn-camera-urgent"', resp_index.text)
         self.assertIn("Escáner de urgencia: No firmes todavía", resp_index.text)
         self.assertIn('id="btn-run-full-analysis"', resp_index.text)
@@ -65,7 +67,8 @@ class TestPaso5FrontendPwaAndRateLimiter(unittest.TestCase):
             '<button id="btn-modal-entendido" class="close-modal bg-blue-600 text-white px-4 py-2 rounded-lg">Entendido</button>',
             resp_index.text,
         )
-        self.assertIn('id="input-google-email"', resp_index.text)
+        self.assertIn("max-h-[85vh]", resp_index.text)
+        self.assertIn("overflow-y-auto", resp_index.text)
         self.assertIn("Pack Micro-Consultas / Recargas: $4.000 ARS", resp_index.text)
         self.assertIn("Pase Mensual por Expediente: $20.000 ARS", resp_index.text)
         self.assertIn(

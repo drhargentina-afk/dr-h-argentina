@@ -424,6 +424,15 @@
     .rounded-lg {
       border-radius: 0.5rem;
     }
+
+    .max-h-\[85vh\] {
+      max-height: 85vh;
+    }
+
+    .overflow-y-auto {
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+    }
   </style>
 </head>
 <body>
@@ -450,8 +459,8 @@
 
   <!-- MODAL DISCRETO PRIMEROS PASOS: CÓMO OBTENER CLAVE JUDICIAL GRATUITA -->
   <div id="modal-primeros-pasos" class="modal-dialog hidden" aria-labelledby="modal-primeros-pasos-title" role="dialog" aria-modal="true" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:9999;align-items:center;justify-content:center;padding:1rem;backdrop-filter:blur(2px);">
-    <div style="border:1px solid var(--border-subtle);border-radius:var(--radius-lg);background:var(--bg-surface);color:var(--text-primary);max-width:560px;width:92%;padding:1.4rem;box-shadow:0 12px 36px rgba(0,0,0,0.3);">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:0.9rem;gap:1rem;">
+    <div class="max-h-[85vh] overflow-y-auto" style="border:1px solid var(--border-subtle);border-radius:var(--radius-lg);background:var(--bg-surface);color:var(--text-primary);max-width:560px;width:92%;max-height:85vh;overflow-y:auto;display:flex;flex-direction:column;padding:1.25rem;box-shadow:0 12px 36px rgba(0,0,0,0.3);">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:0.85rem;gap:1rem;flex-shrink:0;">
         <h3 id="modal-primeros-pasos-title" style="margin:0;font-size:1.15rem;display:flex;align-items:center;gap:0.4rem;">
           🏛️ Primeros Pasos: Tu Clave Judicial Gratuita
         </h3>
@@ -460,7 +469,7 @@
         </button>
       </div>
 
-      <div style="font-size:0.89rem;color:var(--text-secondary);display:flex;flex-direction:column;gap:0.8rem;line-height:1.45;">
+      <div style="font-size:0.89rem;color:var(--text-secondary);display:flex;flex-direction:column;gap:0.8rem;line-height:1.45;overflow-y:auto;flex:1 1 auto;padding-right:0.25rem;">
         <p>
           Como ciudadano interesado o parte de una causa (actor, demandado, querellante o imputado), tenés derecho a consultar tu expediente de forma <strong>100% gratuita</strong> sin intermediarios.
         </p>
@@ -494,7 +503,7 @@
         </div>
       </div>
 
-      <div style="margin-top:1.1rem;text-align:right;">
+      <div style="margin-top:1rem;padding-top:0.65rem;border-top:1px solid var(--border-subtle);text-align:right;flex-shrink:0;">
         <button id="btn-modal-entendido" class="close-modal bg-blue-600 text-white px-4 py-2 rounded-lg">Entendido</button>
       </div>
     </div>
@@ -514,33 +523,25 @@
         </div>
 
         <div style="display:flex;flex-direction:column;align-items:center;gap:1rem;margin-top:1rem;width:100%;">
-          <!-- Botón GIS de Google -->
-          <div id="google-signin-btn-container"></div>
-
-          <form id="google-login-form" autocomplete="off" onsubmit="return false;" style="width:100%;max-width:380px;display:flex;flex-direction:column;gap:0.75rem;">
-            <div class="form-field">
-              <label for="input-google-email" style="font-size:0.86rem;color:var(--text-secondary);text-align:left;">
-                Ingresá con tu correo de Google (@gmail.com):
-              </label>
-              <input
-                id="input-google-email"
-                type="email"
-                class="form-input"
-                placeholder="tu.correo@gmail.com"
-                autocomplete="off"
-              />
-            </div>
-
-            <button id="btn-continue-google" type="button" class="btn btn-google btn-large" style="width:100%;">
-              <svg width="18" height="18" viewBox="0 0 18 18" style="margin-right:6px;">
-                <path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.616z"/>
-                <path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.258c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/>
-                <path fill="#FBBC05" d="M3.964 10.707c-.18-.54-.282-1.117-.282-1.707s.102-1.167.282-1.707V4.961H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.039l3.007-2.332z"/>
-                <path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.961L3.964 7.293C4.672 5.166 6.656 3.58 9 3.58z"/>
-              </svg>
-              Continuar con Google
-            </button>
-          </form>
+          <!-- Contenedor Oficial de Google Identity Services -->
+          <div
+            id="g_id_onload"
+            data-client_id="373505917083-t812fbg0fa29k4q4vd2vcj0vdbgk8kq9.apps.googleusercontent.com"
+            data-context="signin"
+            data-ux_mode="popup"
+            data-callback="handleGoogleCredentialResponse"
+            data-auto_prompt="false"
+          ></div>
+          <div
+            id="google-signin-btn-container"
+            class="g_id_signin"
+            data-type="standard"
+            data-shape="rectangular"
+            data-theme="outline"
+            data-text="continue_with"
+            data-size="large"
+            data-logo_alignment="left"
+          ></div>
 
           <div id="login-feedback" class="state-banner hidden" role="alert" aria-live="assertive"></div>
         </div>

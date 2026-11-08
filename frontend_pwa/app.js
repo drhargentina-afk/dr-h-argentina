@@ -879,35 +879,24 @@
 
     // 3. Copiar borrador para Email
     if (btnCopyEmail) {
-      btnCopyEmail.addEventListener("click", async () => {
-        if (isDeliverablesLocked()) {
-          promptSocialPaywall("copiar el borrador de correo formal");
-          return;
-        }
+      btnCopyEmail.addEventListener("click", (e) => {
+        e.preventDefault();
         const emailTextarea = document.getElementById("report-email-text");
-        const emailVal = emailTextarea?.value || "";
+        const emailVal = emailTextarea ? emailTextarea.value : "";
         if (!emailVal) {
-          alert("No hay borrador para copiar.");
           return;
         }
-        const orig = btnCopyEmail.textContent;
-        try {
-          if (navigator.clipboard && navigator.clipboard.writeText) {
-            await navigator.clipboard.writeText(emailVal);
-          } else if (emailTextarea) {
-            emailTextarea.removeAttribute("readonly");
-            emailTextarea.select();
-            emailTextarea.setSelectionRange(0, emailVal.length);
-            document.execCommand("copy");
-            emailTextarea.setAttribute("readonly", "readonly");
-          }
-          btnCopyEmail.textContent = "¡Copiado!";
-          setTimeout(() => {
-            btnCopyEmail.textContent = orig;
-          }, 2000);
-        } catch (err) {
-          if (emailTextarea) {
-            try {
+        const originalText = "✉️ Copiar borrador para Email";
+        navigator.clipboard
+          .writeText(emailVal)
+          .then(() => {
+            btnCopyEmail.textContent = "¡Copiado!";
+            setTimeout(() => {
+              btnCopyEmail.textContent = originalText;
+            }, 2000);
+          })
+          .catch(() => {
+            if (emailTextarea) {
               emailTextarea.removeAttribute("readonly");
               emailTextarea.select();
               emailTextarea.setSelectionRange(0, emailVal.length);
@@ -915,15 +904,10 @@
               emailTextarea.setAttribute("readonly", "readonly");
               btnCopyEmail.textContent = "¡Copiado!";
               setTimeout(() => {
-                btnCopyEmail.textContent = orig;
+                btnCopyEmail.textContent = originalText;
               }, 2000);
-              return;
-            } catch (fallbackErr) {
-              console.warn("Fallback copy error:", fallbackErr);
             }
-          }
-          alert("No se pudo copiar automáticamente. Podés seleccionarlo de la caja de texto.");
-        }
+          });
       });
     }
   }

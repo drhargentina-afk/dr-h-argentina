@@ -57,6 +57,14 @@ class TestPaso5FrontendPwaAndRateLimiter(unittest.TestCase):
         self.assertIn('id="btn-pay-external"', resp_index.text)
         self.assertIn('id="btn-primeros-pasos"', resp_index.text)
         self.assertIn('id="modal-primeros-pasos"', resp_index.text)
+        self.assertIn(
+            '<meta name="google-signin-client_id" content="373505917083-t812fbg0fa29k4q4vd2vcj0vdbgk8kq9.apps.googleusercontent.com">',
+            resp_index.text,
+        )
+        self.assertIn(
+            '<button id="btn-modal-entendido" class="close-modal bg-blue-600 text-white px-4 py-2 rounded-lg">Entendido</button>',
+            resp_index.text,
+        )
         self.assertIn('id="input-google-email"', resp_index.text)
         self.assertIn("Pack Micro-Consultas / Recargas: $4.000 ARS", resp_index.text)
         self.assertIn("Pase Mensual por Expediente: $20.000 ARS", resp_index.text)

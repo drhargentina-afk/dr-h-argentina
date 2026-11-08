@@ -86,7 +86,10 @@ class ServerSecurityConfig(BaseModel):
         description="Contraseña del Administrador (ADMIN_PASSWORD), nunca escrita en el código fuente.",
     )
     admin_session_ttl_hours: int = Field(default=12, ge=1, le=168)
-    google_client_id: str = Field(default="", description="Client ID de Google Identity Services OAuth 2.0.")
+    google_client_id: str = Field(
+        default="373505917083-t812fbg0fa29k4q4vd2vcj0vdbgk8kq9.apps.googleusercontent.com",
+        description="Client ID de Google Identity Services OAuth 2.0.",
+    )
     external_micro_payment_url: str = Field(
         default="https://dr-h-argentina.onrender.com/#payment-micro",
         description="URL externa Lemon Squeezy para Pack Micro-Consultas / Recargas $4.000 ARS (EXTERNAL_MICRO_PAYMENT_URL).",
@@ -155,7 +158,10 @@ class ServerSecurityConfig(BaseModel):
             admin_user=_get("ADMIN_USER", DEFAULT_ADMIN_USER).strip(),
             admin_password=_resolve_admin_password(_get("ADMIN_PASSWORD", "")),
             admin_session_ttl_hours=ttl_hours,
-            google_client_id=_get("GOOGLE_CLIENT_ID", "").strip(),
+            google_client_id=_get(
+                "GOOGLE_CLIENT_ID",
+                "373505917083-t812fbg0fa29k4q4vd2vcj0vdbgk8kq9.apps.googleusercontent.com",
+            ).strip(),
             external_micro_payment_url=micro_url,
             external_monthly_payment_url=monthly_url,
             external_payment_url=fallback_url,

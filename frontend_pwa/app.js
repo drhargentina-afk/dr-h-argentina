@@ -284,15 +284,23 @@
     const btnContinue = document.getElementById("btn-continue-google");
     const container = document.getElementById("google-signin-btn-container");
     const loginForm = document.getElementById("google-login-form");
+    const metaClientId = document.querySelector('meta[name="google-signin-client_id"]');
+    const googleClientId =
+      (metaClientId && metaClientId.getAttribute("content") && metaClientId.getAttribute("content").trim()) ||
+      "373505917083-t812fbg0fa29k4q4vd2vcj0vdbgk8kq9.apps.googleusercontent.com";
 
     // Inicializar Google Identity Services (GIS)
     function setupGIS() {
       if (window.google && window.google.accounts && window.google.accounts.id) {
         try {
           window.google.accounts.id.initialize({
-            client_id: "dr-h-argentina-google-oauth",
+            client_id: googleClientId,
             callback: async (res) => {
               if (res && res.credential) {
+                const authContainer = document.getElementById("auth-container");
+                const workspace = document.getElementById("app-workspace");
+                if (authContainer) authContainer.classList.add("hidden");
+                if (workspace) workspace.classList.remove("hidden");
                 await syncBackendGoogleSession(res.credential);
               }
             }

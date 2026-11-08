@@ -17,6 +17,7 @@
   <title>Dr. H Argentina — Tu Asistente Legal en Lenguaje Claro</title>
   <meta name="description" content="Consultá tu caso en palabras simples, revisá documentos antes de firmar y hacé seguimiento asíncrono de tus causas sin contraseñas judiciales.">
   <meta name="theme-color" content="#1c2541">
+  <meta name="google-signin-client_id" content="373505917083-t812fbg0fa29k4q4vd2vcj0vdbgk8kq9.apps.googleusercontent.com">
   <link rel="manifest" href="/manifest.json">
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <style>
@@ -393,6 +394,36 @@
     .hidden {
       display: none !important;
     }
+
+    .bg-blue-600 {
+      background-color: var(--accent-brand);
+      border: none;
+      cursor: pointer;
+      font-weight: 600;
+      transition: background-color 0.15s ease;
+    }
+
+    .bg-blue-600:hover {
+      background-color: var(--accent-brand-hover);
+    }
+
+    .text-white {
+      color: #ffffff;
+    }
+
+    .px-4 {
+      padding-left: 1rem;
+      padding-right: 1rem;
+    }
+
+    .py-2 {
+      padding-top: 0.5rem;
+      padding-bottom: 0.5rem;
+    }
+
+    .rounded-lg {
+      border-radius: 0.5rem;
+    }
   </style>
 </head>
 <body>
@@ -464,9 +495,7 @@
       </div>
 
       <div style="margin-top:1.1rem;text-align:right;">
-        <button id="btn-modal-entendido" type="button" class="btn btn-primary close-modal" style="font-size:0.88rem;">
-          Entendido
-        </button>
+        <button id="btn-modal-entendido" class="close-modal bg-blue-600 text-white px-4 py-2 rounded-lg">Entendido</button>
       </div>
     </div>
   </div>

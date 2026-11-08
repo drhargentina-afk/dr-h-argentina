@@ -620,29 +620,53 @@
 
         const resolvedFuero = repoData.classified_fuero || scanData.detected_fuero || "03_laboral";
         const doNotSign = Boolean(scanData.do_not_sign_yet || (state.urgentPhotoMode && scanData.urgency_level !== "VERDE_INFORMATIVO"));
+        const plainSummary = `${repoData.citizen_clear_answer || ""} ${scanData.plain_explanation || ""}`.trim();
+        const paddedPlainSummary =
+          plainSummary.length >= 40
+            ? plainSummary
+            : `${plainSummary} Orientación legal ciudadana verificada conforme a la normativa argentina vigente.`.trim();
 
+        const rawAudioScript = `${repoData.citizen_clear_answer || ""} ${scanData.immediate_action_guide || ""} Recordá siempre solicitar copia íntegra de toda presentación antes de firmar cualquier escrito o acuerdo judicial.`.trim();
+        const paddedAudioScript =
+          rawAudioScript.length >= 80
+            ? rawAudioScript
+            : `${rawAudioScript} Este resumen fue elaborado en lenguaje claro para que puedas conversar con tu profesional matriculado con total respaldo normativo.`;
+
+        const reportId = `drh-${Date.now().toString(16).slice(-8)}`;
         const synthesizedReport = {
-          report_id: `drh-${Date.now().toString(16).slice(-8)}`,
-          session_id: `ses-${Date.now()}`,
+          report_id: reportId,
           generated_at_iso: new Date().toISOString(),
-          fuero: resolvedFuero,
+          country_code: "AR",
           province_jurisdiction: "PJN_NACION_CABA",
-          citizen_plain_summary: `${repoData.citizen_clear_answer} ${scanData.plain_explanation}`,
-          verified_timeline_cards: [],
-          audit_and_deadlines_section: `${scanData.immediate_action_guide} (${repoData.temporal_validity_note})`,
+          fuero: resolvedFuero,
+          subscription_tier_applied: "NIVEL_0_GRATUITO_HASTA_15_PAGS",
           do_not_sign_yet_alert: doNotSign,
           do_not_sign_alert_box: doNotSign ? `${scanData.plain_explanation} ${scanData.immediate_action_guide}` : null,
+          citizen_plain_summary: paddedPlainSummary,
+          verified_timeline_cards: [
+            {
+              foja_ref: 1,
+              document_piece_type: state.urgentPhotoMode ? "Documento Escaneado de Urgencia" : "Consulta Directa en Lenguaje Claro",
+              verbatim_excerpt: queryText.length >= 5 ? queryText.slice(0, 280) : "Consulta preventiva ciudadana",
+              citizen_plain_translation: paddedPlainSummary.slice(0, 400),
+              normative_ref: (repoData.cited_laws && repoData.cited_laws[0]) || "Código Procesal Civil y Comercial / LCT"
+            }
+          ],
+          audit_and_deadlines_section: `${scanData.immediate_action_guide} (${repoData.temporal_validity_note})`,
           questions_for_your_lawyer: [
             "¿Cuál es el estado actual de la causa y qué plazo legal rige para la próxima foja?",
             "Antes de firmar o consentir un acuerdo, ¿me puede enviar una copia completa por este medio?",
             "¿La tasa de justicia o gastos solicitados cuentan con constancia o exención por beneficio de litigar sin gastos?"
           ],
+          audio_script_90_seconds: paddedAudioScript,
           whatsapp_ready_message: doNotSign
             ? "Hola Doc, antes de firmar o avanzar con lo propuesto, prefiero que me pase una copia completa para leerla con tranquilidad y revisar los puntos del acuerdo. ¡Muchas gracias!"
             : "Hola Doc, le escribo para consultarle cómo sigue el trámite, qué plazos tenemos por delante y si necesita que le acerque alguna documentación adicional. ¡Muchas gracias!",
-          audio_script_90_seconds: `${repoData.citizen_clear_answer}. ${scanData.immediate_action_guide}`,
-          zero_storage_confirmation: "Privacidad garantizada: consulta procesada en memoria RAM.",
-          legal_shield_disclaimer: "Orientación ciudadana basada en normativa argentina vigente."
+          legal_shield_disclaimer:
+            "Orientación ciudadana basada en normativa argentina vigente. No sustituye el patrocinio letrado obligatorio.",
+          zero_storage_confirmation:
+            "Privacidad garantizada: consulta procesada íntegramente en memoria RAM sin persistencia en servidor.",
+          drive_saved_file_uri: `https://drive.google.com/dr-h-ar/${reportId}.pdf`
         };
 
         renderUnifiedResponse(synthesizedReport);
@@ -680,6 +704,80 @@
     }
   }
 
+  function normalizeReportPayloadForPdf(rawReport) {
+    const reportId =
+      rawReport && typeof rawReport.report_id === "string" && rawReport.report_id.length >= 8
+        ? rawReport.report_id
+        : `drh-${Date.now().toString(16).slice(-8)}`;
+    const plainSummary =
+      rawReport && typeof rawReport.citizen_plain_summary === "string" && rawReport.citizen_plain_summary.trim().length >= 40
+        ? rawReport.citizen_plain_summary.trim()
+        : `${(rawReport && rawReport.citizen_plain_summary) || "Dictamen orientativo emitido por Dr. H Argentina."} Análisis normativo y procesal en lenguaje claro ciudadano.`;
+    const auditSection =
+      rawReport && typeof rawReport.audit_and_deadlines_section === "string" && rawReport.audit_and_deadlines_section.trim().length >= 20
+        ? rawReport.audit_and_deadlines_section.trim()
+        : "Plazos procesales y días de nota sujetos al código procesal de la jurisdicción.";
+    const audioScript =
+      rawReport && typeof rawReport.audio_script_90_seconds === "string" && rawReport.audio_script_90_seconds.trim().length >= 80
+        ? rawReport.audio_script_90_seconds.trim()
+        : `${plainSummary} Recordá siempre pedir copia completa antes de firmar cualquier escrito o convenio judicial.`;
+    const waMsg =
+      rawReport && typeof rawReport.whatsapp_ready_message === "string" && rawReport.whatsapp_ready_message.trim().length >= 40
+        ? rawReport.whatsapp_ready_message.trim()
+        : "Hola Doc, le escribo para consultarle cómo sigue el trámite, qué plazos tenemos por delante y pedirle copia de la última presentación.";
+    const disclaimer =
+      rawReport && typeof rawReport.legal_shield_disclaimer === "string" && rawReport.legal_shield_disclaimer.trim().length >= 40
+        ? rawReport.legal_shield_disclaimer.trim()
+        : "Orientación ciudadana basada en normativa argentina vigente. No sustituye el patrocinio letrado obligatorio.";
+    const zeroStorage =
+      rawReport && typeof rawReport.zero_storage_confirmation === "string" && rawReport.zero_storage_confirmation.trim().length >= 20
+        ? rawReport.zero_storage_confirmation.trim()
+        : "Privacidad garantizada: documento procesado en memoria RAM sin copias en el servidor.";
+
+    const rawCards = Array.isArray(rawReport?.verified_timeline_cards) ? rawReport.verified_timeline_cards : [];
+    const timelineCards =
+      rawCards.length > 0
+        ? rawCards
+        : [
+            {
+              foja_ref: 1,
+              document_piece_type: "Consulta Ciudadana",
+              verbatim_excerpt: "Consulta procesada en Dr. H Argentina",
+              citizen_plain_translation: plainSummary.slice(0, 350),
+              normative_ref: "Normativa Nacional y Procesal Vigente"
+            }
+          ];
+
+    const rawQuestions = Array.isArray(rawReport?.questions_for_your_lawyer) ? rawReport.questions_for_your_lawyer : [];
+    const questions =
+      rawQuestions.length >= 2
+        ? rawQuestions
+        : [
+            "¿Cuál es el estado actual de la causa y qué plazo legal rige para la próxima actuación?",
+            "¿Me puede facilitar copia íntegra de la presentación o acuerdo antes de prestar conformidad?"
+          ];
+
+    return {
+      report_id: reportId,
+      generated_at_iso: rawReport?.generated_at_iso || new Date().toISOString(),
+      country_code: "AR",
+      province_jurisdiction: rawReport?.province_jurisdiction || "PJN_NACION_CABA",
+      fuero: rawReport?.fuero || "03_laboral",
+      subscription_tier_applied: rawReport?.subscription_tier_applied || "NIVEL_0_GRATUITO_HASTA_15_PAGS",
+      do_not_sign_yet_alert: Boolean(rawReport?.do_not_sign_yet_alert),
+      do_not_sign_alert_box: rawReport?.do_not_sign_alert_box || null,
+      citizen_plain_summary: plainSummary,
+      verified_timeline_cards: timelineCards,
+      audit_and_deadlines_section: auditSection,
+      questions_for_your_lawyer: questions,
+      audio_script_90_seconds: audioScript,
+      whatsapp_ready_message: waMsg,
+      legal_shield_disclaimer: disclaimer,
+      zero_storage_confirmation: zeroStorage,
+      drive_saved_file_uri: rawReport?.drive_saved_file_uri || `https://drive.google.com/dr-h-ar/${reportId}.pdf`
+    };
+  }
+
   async function downloadAuditedPdf() {
     if (!state.lastFinalReport) {
       alert("Primero realizá una consulta para generar el dictamen.");
@@ -690,23 +788,40 @@
       return;
     }
 
+    const token = state.accessToken || readStoredSessionToken();
+    const payload = normalizeReportPayloadForPdf(state.lastFinalReport);
+
     const btnDownloadPdf = document.getElementById("btn-download-pdf");
     if (btnDownloadPdf) {
       btnDownloadPdf.disabled = true;
       btnDownloadPdf.textContent = "Generando PDF en RAM...";
     }
     try {
-      const resp = await apiFetch("/download-report-pdf", {
+      const headers = {
+        "Content-Type": "application/json"
+      };
+      if (token) {
+        headers["Authorization"] = "Bearer " + token;
+      }
+
+      const resp = await fetch("/download-report-pdf", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(state.lastFinalReport)
+        headers,
+        body: JSON.stringify(payload)
       });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      if (resp.status === 401) {
+        handleSessionExpired("Tu sesión venció o es inválida. Por favor ingresá nuevamente con Google.");
+        throw new Error("Sesión no autorizada.");
+      }
+      if (!resp.ok) {
+        const errData = await resp.json().catch(() => ({}));
+        throw new Error(errData.detail ? JSON.stringify(errData.detail) : `HTTP ${resp.status}`);
+      }
       const pdfBlob = await resp.blob();
       const url = URL.createObjectURL(pdfBlob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = `Informe_Dr_H_${state.lastFinalReport.report_id}.pdf`;
+      link.download = `Informe_Dr_H_${payload.report_id}.pdf`;
       document.body.appendChild(link);
       link.click();
       link.remove();

@@ -221,6 +221,33 @@ class TestPaso5FrontendPwaAndRateLimiter(unittest.TestCase):
         finally:
             doc.close()
 
+        # 3b. Verificar que el payload sintetizado de consulta verbal rápida nunca devuelva HTTP 422
+        synthesized_verbal_payload = {
+            "report_id": "drh-12345678",
+            "session_id": "ses-12345",
+            "generated_at_iso": "2026-11-08T00:00:00Z",
+            "fuero": "03_laboral",
+            "province_jurisdiction": "PJN_NACION_CABA",
+            "citizen_plain_summary": "Consulta verbal sobre indemnización laboral y plazos.",
+            "verified_timeline_cards": [],
+            "audit_and_deadlines_section": "Revisar plazos antes de firmar.",
+            "do_not_sign_yet_alert": True,
+            "do_not_sign_alert_box": "No firmes sin revisar.",
+            "questions_for_your_lawyer": ["¿Cuál es el estado de la causa?"],
+            "whatsapp_ready_message": "Hola Doc, le escribo por mi consulta.",
+            "audio_script_90_seconds": "Resumen hablado breve.",
+            "zero_storage_confirmation": "Privacidad garantizada.",
+            "legal_shield_disclaimer": "Orientación ciudadana.",
+        }
+        resp_verbal_pdf = client.post(
+            "/download-report-pdf",
+            json=synthesized_verbal_payload,
+            headers=admin_headers,
+        )
+        self.assertEqual(resp_verbal_pdf.status_code, 200)
+        self.assertEqual(resp_verbal_pdf.headers.get("content-type"), "application/pdf")
+        self.assertTrue(resp_verbal_pdf.content.startswith(b"%PDF-"))
+
         # 4. Verificar /queue-status
         resp_queue = client.get("/queue-status", headers=admin_headers)
         self.assertEqual(resp_queue.status_code, 200)

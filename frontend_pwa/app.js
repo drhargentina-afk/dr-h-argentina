@@ -1097,103 +1097,217 @@
     const btnPayExternal = document.getElementById("btn-pay-external");
     const statusBox = document.getElementById("payment-status-feedback");
 
-    async function triggerSocialShare(network) {
-      const shareText = state.socialShareText;
-      const targetAppUrl = state.appUrl || window.location.origin;
+    const allShareButtons = [btnShareWa, btnShareX, btnShareFb, btnShareIg, btnShareThreads].filter(Boolean);
+    const allPayButtons = [btnPayMicro, btnPayMonthly, btnPayExternal].filter(Boolean);
 
-      let shareUrl = "";
-      if (network === "whatsapp") {
-        shareUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(shareText + " " + targetAppUrl)}`;
-      } else if (network === "x") {
-        shareUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}&url=${encodeURIComponent(targetAppUrl)}`;
-      } else if (network === "facebook") {
-        shareUrl = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(targetAppUrl)}&quote=${encodeURIComponent(shareText)}`;
-      } else if (network === "threads") {
-        shareUrl = `https://www.threads.net/intent/post?text=${encodeURIComponent(shareText + " " + targetAppUrl)}`;
-      } else if (network === "instagram") {
-        try {
-          if (navigator.clipboard) {
-            await navigator.clipboard.writeText(`${shareText} ${targetAppUrl}`);
-          }
-        } catch (e) {
-          // Continuar
-        }
-        shareUrl = "https://www.instagram.com/";
-      }
+    function formatNetworkLabel(net) {
+      if (!net) return "Redes";
+      return net.charAt(0).toUpperCase() + net.slice(1);
+    }
 
-      if (shareUrl) {
-        window.open(shareUrl, "_blank", "noopener,noreferrer");
-      }
-
-      // Desbloqueo automático al detectar el evento de clic
-      if (statusBox) {
-        statusBox.className = "state-banner";
-        statusBox.classList.remove("hidden");
-        const extraNote = network === "instagram" ? " (Texto promocional copiado al portapapeles)" : "";
-        statusBox.textContent = `Procesando difusión en ${network.capitalize()}...${extraNote}`;
-      }
-
+    async function completeSocialUnlockAndAdvance(network) {
       try {
         const resp = await apiFetch("/payments/social-unlock", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ network })
         });
-
         if (resp.ok) {
           state.isSocialUnlocked = true;
           if (state.currentUser) {
             state.currentUser.has_paid_pass = true;
             state.currentUser.can_consult_free = true;
           }
-          if (statusBox) {
-            statusBox.className = "state-banner success";
-            statusBox.textContent = "🎉 ¡Acceso Desbloqueado! Gracias por difundir Dr. H en redes. Ya podés leer tu dictamen completo y descargar tu informe.";
-          }
-          // Actualizar vista
-          setLoggedInView(state.currentUser);
         }
       } catch (err) {
-        // Resiliencia: si está autenticado, desbloquear en cliente
-        state.isSocialUnlocked = true;
-        if (statusBox) {
-          statusBox.className = "state-banner success";
-          statusBox.textContent = "🎉 ¡Acceso Desbloqueado! Ya podés leer tu dictamen y acceder a todas las funciones.";
+        console.warn("Aviso desbloqueo social:", err);
+      }
+
+      // Desbloquear siempre en cliente tras completar la acción de difusión
+      state.isSocialUnlocked = true;
+      if (state.currentUser) {
+        state.currentUser.has_paid_pass = true;
+        state.currentUser.can_consult_free = true;
+      }
+
+      const paywallCard = document.getElementById("social-paywall-card");
+      const lockedAlert = document.getElementById("report-locked-alert");
+      const reportSection = document.getElementById("report-output-section");
+
+      if (paywallCard) paywallCard.classList.add("hidden");
+      if (lockedAlert) lockedAlert.classList.add("hidden");
+      setLoggedInView(state.currentUser);
+
+      // Si había un informe ya generado en pantalla, mostrarlo completo y disparar su descarga
+      if (state.lastFinalReport) {
+        if (reportSection) {
+          reportSection.classList.remove("hidden");
+          reportSection.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+        await downloadAuditedPdf();
+      } else {
+        // Si el muro saltó al intentar una 2da consulta (HTTP 402), ejecutar la consulta ahora mismo
+        const verbalText = document.getElementById("input-verbal-statement")?.value.trim() || "";
+        if (state.currentPdfBlob || verbalText.length >= 5 || state.attachedMediaName) {
+          await runUnifiedConsultation();
         }
       }
     }
 
-    if (btnShareWa) btnShareWa.addEventListener("click", () => triggerSocialShare("whatsapp"));
-    if (btnShareX) btnShareX.addEventListener("click", () => triggerSocialShare("x"));
-    if (btnShareFb) btnShareFb.addEventListener("click", () => triggerSocialShare("facebook"));
-    if (btnShareIg) btnShareIg.addEventListener("click", () => triggerSocialShare("instagram"));
-    if (btnShareThreads) btnShareThreads.addEventListener("click", () => triggerSocialShare("threads"));
+    async function triggerSocialShare(network, clickedBtn) {
+      const shareText = state.socialShareText;
+      const targetAppUrl = state.appUrl || window.location.origin;
+      const netLabel = formatNetworkLabel(network);
+      const origHtml = clickedBtn ? clickedBtn.innerHTML : "";
+
+      allShareButtons.forEach((b) => {
+        b.disabled = true;
+      });
+      if (clickedBtn) {
+        clickedBtn.textContent = "Cargando...";
+      }
+
+      if (statusBox) {
+        statusBox.className = "state-banner";
+        statusBox.classList.remove("hidden");
+        statusBox.textContent = `Cargando... Procesando difusión en ${netLabel} y desbloqueando tu informe detallado...`;
+      }
+
+      try {
+        let shareUrl = "";
+        if (network === "whatsapp") {
+          shareUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(shareText + " " + targetAppUrl)}`;
+        } else if (network === "x") {
+          shareUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}&url=${encodeURIComponent(targetAppUrl)}`;
+        } else if (network === "facebook") {
+          shareUrl = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(targetAppUrl)}&quote=${encodeURIComponent(shareText)}`;
+        } else if (network === "threads") {
+          shareUrl = `https://www.threads.net/intent/post?text=${encodeURIComponent(shareText + " " + targetAppUrl)}`;
+        } else if (network === "instagram") {
+          shareUrl = "https://www.instagram.com/";
+        }
+
+        if (shareUrl) {
+          window.open(shareUrl, "_blank", "noopener,noreferrer");
+        }
+
+        // Si el navegador soporta Web Share API nativa o fallback de portapapeles
+        if (navigator.share && network === "native") {
+          await navigator
+            .share({
+              title: "Dr. H Argentina - Asistente Legal",
+              text: shareText,
+              url: targetAppUrl
+            })
+            .then(() => completeSocialUnlockAndAdvance(network))
+            .catch(async () => {
+              if (navigator.clipboard && navigator.clipboard.writeText) {
+                await navigator.clipboard.writeText(`${shareText} ${targetAppUrl}`).catch(() => {});
+              }
+              await completeSocialUnlockAndAdvance(network);
+            });
+        } else {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(`${shareText} ${targetAppUrl}`).catch(() => {});
+          }
+          await completeSocialUnlockAndAdvance(network);
+        }
+      } finally {
+        allShareButtons.forEach((b) => {
+          b.disabled = false;
+        });
+        if (clickedBtn && origHtml) {
+          clickedBtn.innerHTML = origHtml;
+        }
+      }
+    }
+
+    async function handleMonetaryPaymentClick(planType, clickedBtn) {
+      const origHtml = clickedBtn ? clickedBtn.innerHTML : "";
+      allPayButtons.forEach((b) => {
+        b.disabled = true;
+      });
+      if (clickedBtn) {
+        clickedBtn.textContent = "Cargando...";
+      }
+      if (statusBox) {
+        statusBox.className = "state-banner";
+        statusBox.classList.remove("hidden");
+        statusBox.textContent = "Cargando... Redirigiendo a la pasarela de pago segura...";
+      }
+
+      try {
+        const resp = await fetch("/payments/checkout", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ plan_type: planType })
+        });
+        if (resp.ok) {
+          const data = await resp.json();
+          const targetUrl =
+            data.init_point ||
+            data.checkout_url ||
+            (planType === "MICRO" ? state.microPaymentUrl : state.monthlyPaymentUrl);
+          if (targetUrl) {
+            window.location.href = targetUrl;
+            return;
+          }
+        }
+        // Fallback desde /payments/config
+        const cfgResp = await fetch("/payments/config");
+        if (cfgResp.ok) {
+          const cfgData = await cfgResp.json();
+          const fallbackUrl =
+            planType === "MICRO"
+              ? cfgData.micro_payment_url
+              : cfgData.monthly_payment_url || cfgData.external_payment_url;
+          if (fallbackUrl) {
+            window.location.href = fallbackUrl;
+            return;
+          }
+        }
+        const localUrl = planType === "MICRO" ? state.microPaymentUrl : state.monthlyPaymentUrl;
+        if (localUrl) {
+          window.location.href = localUrl;
+        }
+      } catch (err) {
+        console.warn("Error iniciando checkout:", err);
+        const localUrl = planType === "MICRO" ? state.microPaymentUrl : state.monthlyPaymentUrl;
+        if (localUrl) {
+          window.location.href = localUrl;
+        }
+      } finally {
+        allPayButtons.forEach((b) => {
+          b.disabled = false;
+        });
+        if (clickedBtn && origHtml) {
+          clickedBtn.innerHTML = origHtml;
+        }
+      }
+    }
+
+    if (btnShareWa) btnShareWa.addEventListener("click", () => triggerSocialShare("whatsapp", btnShareWa));
+    if (btnShareX) btnShareX.addEventListener("click", () => triggerSocialShare("x", btnShareX));
+    if (btnShareFb) btnShareFb.addEventListener("click", () => triggerSocialShare("facebook", btnShareFb));
+    if (btnShareIg) btnShareIg.addEventListener("click", () => triggerSocialShare("instagram", btnShareIg));
+    if (btnShareThreads) btnShareThreads.addEventListener("click", () => triggerSocialShare("threads", btnShareThreads));
 
     if (btnUnlockNow) {
       btnUnlockNow.addEventListener("click", () => {
-        promptSocialPaywall("desbloquear la lectura completa del informe y los descargables");
+        triggerSocialShare("native", btnUnlockNow);
       });
     }
 
     if (btnPayMicro) {
-      btnPayMicro.addEventListener("click", () => {
-        const targetUrl = state.microPaymentUrl || state.externalPaymentUrl || "https://dr-h-argentina.onrender.com/#payment-micro";
-        window.open(targetUrl, "_blank", "noopener,noreferrer");
-      });
+      btnPayMicro.addEventListener("click", () => handleMonetaryPaymentClick("MICRO", btnPayMicro));
     }
 
     if (btnPayMonthly) {
-      btnPayMonthly.addEventListener("click", () => {
-        const targetUrl = state.monthlyPaymentUrl || state.externalPaymentUrl || "https://dr-h-argentina.onrender.com/#payment-monthly";
-        window.open(targetUrl, "_blank", "noopener,noreferrer");
-      });
+      btnPayMonthly.addEventListener("click", () => handleMonetaryPaymentClick("MONTHLY", btnPayMonthly));
     }
 
     if (btnPayExternal) {
-      btnPayExternal.addEventListener("click", () => {
-        const targetUrl = state.monthlyPaymentUrl || state.externalPaymentUrl || "https://dr-h-argentina.onrender.com/#payment-monthly";
-        window.open(targetUrl, "_blank", "noopener,noreferrer");
-      });
+      btnPayExternal.addEventListener("click", () => handleMonetaryPaymentClick("MONTHLY", btnPayExternal));
     }
   }
 

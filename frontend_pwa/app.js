@@ -16,6 +16,17 @@
   const TOKEN_STORAGE_KEY = "drh_session_token";
   const ADMIN_STORAGE_KEY = "drh_admin_token";
 
+  const ADMIN_EMAILS = [
+    "dr.h.argentina@gmail.com",
+    "mendezdamian081@gmail.com"
+  ];
+
+  function isWhitelistedAdminEmail(email) {
+    if (!email || typeof email !== "string") return false;
+    const userEmail = email.trim().toLowerCase();
+    return ADMIN_EMAILS.includes(userEmail);
+  }
+
   const FUERO_LABELS = {
     AUTO: "Detección automática",
     "01_penal": "Penal y Garantías Constitucionales",
@@ -175,7 +186,12 @@
 
   function isDeliverablesLocked() {
     if (!state.currentUser) return false;
-    if (state.currentUser.is_admin || state.currentUser.has_paid_pass || state.isSocialUnlocked) {
+    if (
+      state.currentUser.is_admin ||
+      isWhitelistedAdminEmail(state.currentUser.email) ||
+      state.currentUser.has_paid_pass ||
+      state.isSocialUnlocked
+    ) {
       return false;
     }
     return !state.currentUser.can_consult_free || state.currentUser.free_consultations_used >= 1;
@@ -192,14 +208,20 @@
     const adminToolbar = document.getElementById("admin-toolbar");
 
     if (userProfile) {
+      const userEmail =
+        typeof userProfile.email === "string" ? userProfile.email.trim().toLowerCase() : "";
+      const isUserAdmin = Boolean(userProfile.is_admin || ADMIN_EMAILS.includes(userEmail));
+      userProfile.is_admin = isUserAdmin;
+      if (isUserAdmin) {
+        userProfile.has_paid_pass = true;
+        userProfile.can_consult_free = true;
+      }
+
       if (authContainer) authContainer.classList.add("hidden");
       if (loginSection) loginSection.classList.add("hidden");
       if (workspace) workspace.classList.remove("hidden");
       if (adminToolbar) {
-        if (
-          typeof userProfile.email === "string" &&
-          userProfile.email.trim().toLowerCase() === "dr.h.argentina@gmail.com"
-        ) {
+        if (ADMIN_EMAILS.includes(userEmail)) {
           adminToolbar.classList.remove("hidden");
           adminToolbar.style.display = "flex";
         } else {

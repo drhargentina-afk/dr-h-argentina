@@ -19,7 +19,7 @@ from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token
 from pydantic import BaseModel, ConfigDict, Field
 
-from core.config import OFFICIAL_ADMIN_EMAIL, ServerSecurityConfig
+from core.config import ADMIN_EMAILS, OFFICIAL_ADMIN_EMAIL, ServerSecurityConfig
 from core.database import DrHDatabase
 
 _logger = logging.getLogger("dr_h.auth_oauth")
@@ -136,7 +136,8 @@ class GoogleOAuthManager:
         now = datetime.now(timezone.utc)
         expires = now + timedelta(hours=self.config.admin_session_ttl_hours * 2)
 
-        is_admin = email == OFFICIAL_ADMIN_EMAIL.lower()
+        admin_whitelist = {addr.lower() for addr in ADMIN_EMAILS} | {OFFICIAL_ADMIN_EMAIL.lower()}
+        is_admin = email in admin_whitelist
         if is_admin:
             self.db.set_user_paid_pass(email, True)
             user_row = self.db.get_user_by_email(email) or user_row
@@ -189,7 +190,8 @@ class GoogleOAuthManager:
             raise PermissionError("Usuario no encontrado en la base de datos.")
 
         free_used = int(user["free_consultations_used"])
-        is_admin = email.lower() == OFFICIAL_ADMIN_EMAIL.lower()
+        admin_whitelist = {addr.lower() for addr in ADMIN_EMAILS} | {OFFICIAL_ADMIN_EMAIL.lower()}
+        is_admin = email.lower() in admin_whitelist
         has_paid = is_admin or (int(user["has_paid_pass"]) == 1)
         can_free = is_admin or ((free_used == 0) and not has_paid)
 

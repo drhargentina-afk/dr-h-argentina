@@ -25,6 +25,10 @@ _logger = logging.getLogger("dr_h.config")
 
 DEFAULT_ADMIN_USER = "dr.h.argentina@gmail.com"
 OFFICIAL_ADMIN_EMAIL = "dr.h.argentina@gmail.com"
+ADMIN_EMAILS: tuple[str, ...] = (
+    "dr.h.argentina@gmail.com",
+    "mendezdamian081@gmail.com",
+)
 MIN_ADMIN_PASSWORD_LENGTH = 12
 
 

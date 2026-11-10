@@ -19,7 +19,7 @@ from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token
 from pydantic import BaseModel, ConfigDict, Field
 
-from core.config import ADMIN_EMAILS, OFFICIAL_ADMIN_EMAIL, ServerSecurityConfig
+from core.config import ADMIN_EMAILS, OFFICIAL_ADMIN_EMAIL, ServerSecurityConfig, is_whitelisted_admin_email
 from core.database import DrHDatabase
 
 _logger = logging.getLogger("dr_h.auth_oauth")
@@ -120,8 +120,8 @@ class GoogleOAuthManager:
     def login_with_google(self, credential: str) -> GoogleAuthResponse:
         """Autentica o registra al usuario mediante Google OAuth y emite el token de sesión."""
         info = self.verify_google_token(credential)
-        email = info["email"].lower().strip()
-        name = info.get("name", email.split("@")[0]).strip()
+        email = str(info.get("email", "")).strip().lower()
+        name = str(info.get("name", email.split("@")[0])).strip()
         google_id = str(info.get("sub", ""))
         picture = str(info.get("picture", ""))
 
@@ -136,8 +136,7 @@ class GoogleOAuthManager:
         now = datetime.now(timezone.utc)
         expires = now + timedelta(hours=self.config.admin_session_ttl_hours * 2)
 
-        admin_whitelist = {addr.lower() for addr in ADMIN_EMAILS} | {OFFICIAL_ADMIN_EMAIL.lower()}
-        is_admin = email in admin_whitelist
+        is_admin = is_whitelisted_admin_email(email)
         if is_admin:
             self.db.set_user_paid_pass(email, True)
             user_row = self.db.get_user_by_email(email) or user_row
@@ -150,8 +149,9 @@ class GoogleOAuthManager:
         )
 
         free_used = int(user_row["free_consultations_used"])
-        has_paid = is_admin or (int(user_row["has_paid_pass"]) == 1)
-        can_free = is_admin or ((free_used == 0) and not has_paid)
+        db_has_paid = int(user_row["has_paid_pass"]) == 1
+        has_paid = bool(is_admin or db_has_paid)
+        can_free = bool(is_admin or ((free_used == 0) and not has_paid))
 
         msg = (
             "Bienvenido/a a Dr. H Argentina. Tenés 1 consulta gratuita disponible."
@@ -184,16 +184,16 @@ class GoogleOAuthManager:
         if not sess:
             raise PermissionError("Tu sesión es inválida o expiró. Por favor volvé a ingresar con Google.")
 
-        email = str(sess["user_email"])
+        email = str(sess["user_email"]).strip().lower()
         user = self.db.get_user_by_email(email)
         if not user:
             raise PermissionError("Usuario no encontrado en la base de datos.")
 
         free_used = int(user["free_consultations_used"])
-        admin_whitelist = {addr.lower() for addr in ADMIN_EMAILS} | {OFFICIAL_ADMIN_EMAIL.lower()}
-        is_admin = email.lower() in admin_whitelist
-        has_paid = is_admin or (int(user["has_paid_pass"]) == 1)
-        can_free = is_admin or ((free_used == 0) and not has_paid)
+        is_admin = is_whitelisted_admin_email(email)
+        db_has_paid = int(user["has_paid_pass"]) == 1
+        has_paid = bool(is_admin or db_has_paid)
+        can_free = bool(is_admin or ((free_used == 0) and not has_paid))
 
         return UserProfileResponse(
             email=email,

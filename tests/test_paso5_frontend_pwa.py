@@ -123,7 +123,12 @@ class TestPaso5FrontendPwaAndRateLimiter(unittest.TestCase):
         self.assertIn("ADMIN_EMAILS", resp_js.text)
         self.assertIn("dr.h.argentina@gmail.com", resp_js.text)
         self.assertIn("mendezdamian081@gmail.com", resp_js.text)
+        for slot_idx in range(3, 13):
+            self.assertIn(f'// "slot{slot_idx}@gmail.com"', resp_js.text)
         self.assertIn("ADMIN_EMAILS.includes(userEmail)", resp_js.text)
+        self.assertIn("ensurePaymentButtonsVisible()", resp_js.text)
+        self.assertIn('id="btn-pay-micro"', resp_index.text)
+        self.assertIn('id="btn-pay-monthly"', resp_index.text)
         self.assertIn("Analizando la documentación del caso...", resp_js.text)
         self.assertIn("Revisando jurisprudencia aplicable...", resp_js.text)
         self.assertIn("Redactando el informe final...", resp_js.text)

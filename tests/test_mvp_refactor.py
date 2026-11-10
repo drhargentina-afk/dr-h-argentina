@@ -279,6 +279,63 @@ class TestMvpRefactorRoadmap(unittest.TestCase):
         resp_me_after = self.client.get("/auth/me", headers=headers)
         self.assertTrue(resp_me_after.json()["has_paid_pass"])
 
+    def test_strict_admin_whitelist_and_common_user_paywall_lock(self) -> None:
+        """Verifica que SOLO dr.h.argentina@gmail.com y mendezdamian081@gmail.com entren bonificados,
+        y que usuario.comun@gmail.com (o cualquier otro email) entre con is_admin=False y has_paid_pass=False."""
+        from core.config import ADMIN_EMAILS, is_whitelisted_admin_email
+
+        self.assertEqual(
+            ADMIN_EMAILS,
+            [
+                "dr.h.argentina@gmail.com",
+                "mendezdamian081@gmail.com",
+            ],
+        )
+
+        # 1. Validar que los dos correos autorizados entren desbloqueados (incluso con mayúsculas o espacios)
+        for admin_raw in ("dr.h.argentina@gmail.com", "  MendezDamian081@gmail.com  "):
+            self.assertTrue(is_whitelisted_admin_email(admin_raw))
+            resp_adm = self.client.post(
+                "/auth/google",
+                json={"credential": f"mock_google_oauth:{admin_raw}:Admin Autorizado"},
+            )
+            self.assertEqual(resp_adm.status_code, 200)
+            adm_user = resp_adm.json()["user"]
+            self.assertTrue(adm_user["is_admin"])
+            self.assertTrue(adm_user["has_paid_pass"])
+            self.assertTrue(adm_user["can_consult_free"])
+
+            adm_token = resp_adm.json()["access_token"]
+            resp_me_adm = self.client.get("/auth/me", headers={"Authorization": f"Bearer {adm_token}"})
+            self.assertEqual(resp_me_adm.status_code, 200)
+            self.assertTrue(resp_me_adm.json()["is_admin"])
+            self.assertTrue(resp_me_adm.json()["has_paid_pass"])
+
+        # 2. Validar que ningún slot vacío, nulo o reservado valide como verdadero
+        for invalid_slot in ("", "   ", None, "slot3@gmail.com", "slot12@gmail.com"):
+            self.assertFalse(is_whitelisted_admin_email(invalid_slot))  # type: ignore[arg-type]
+
+        # 3. Validar que usuario.comun@gmail.com entre bloqueado (is_admin=False y has_paid_pass=False)
+        common_email = "usuario.comun@gmail.com"
+        db.set_user_paid_pass(common_email, False)
+        self.assertFalse(is_whitelisted_admin_email(common_email))
+
+        resp_common = self.client.post(
+            "/auth/google",
+            json={"credential": f"mock_google_oauth:{common_email}:Usuario Comun"},
+        )
+        self.assertEqual(resp_common.status_code, 200)
+        common_user = resp_common.json()["user"]
+        self.assertEqual(common_user["email"], common_email)
+        self.assertFalse(common_user["is_admin"])
+        self.assertFalse(common_user["has_paid_pass"])
+
+        common_token = resp_common.json()["access_token"]
+        resp_me_common = self.client.get("/auth/me", headers={"Authorization": f"Bearer {common_token}"})
+        self.assertEqual(resp_me_common.status_code, 200)
+        self.assertFalse(resp_me_common.json()["is_admin"])
+        self.assertFalse(resp_me_common.json()["has_paid_pass"])
+
 
 if __name__ == "__main__":
     unittest.main()

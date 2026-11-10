@@ -25,11 +25,36 @@ _logger = logging.getLogger("dr_h.config")
 
 DEFAULT_ADMIN_USER = "dr.h.argentina@gmail.com"
 OFFICIAL_ADMIN_EMAIL = "dr.h.argentina@gmail.com"
-ADMIN_EMAILS: tuple[str, ...] = (
+ADMIN_EMAILS: list[str] = [
     "dr.h.argentina@gmail.com",
     "mendezdamian081@gmail.com",
-)
+    # "slot3@gmail.com",
+    # "slot4@gmail.com",
+    # "slot5@gmail.com",
+    # "slot6@gmail.com",
+    # "slot7@gmail.com",
+    # "slot8@gmail.com",
+    # "slot9@gmail.com",
+    # "slot10@gmail.com",
+    # "slot11@gmail.com",
+    # "slot12@gmail.com",
+]
 MIN_ADMIN_PASSWORD_LENGTH = 12
+
+
+def is_whitelisted_admin_email(email: str | None) -> bool:
+    """Verifica estrictamente si un correo pertenece a ADMIN_EMAILS ignorando valores vacíos o nulos."""
+    if not email or not isinstance(email, str):
+        return False
+    normalized = email.strip().lower()
+    if not normalized:
+        return False
+    valid_admins = {
+        addr.strip().lower()
+        for addr in ADMIN_EMAILS
+        if isinstance(addr, str) and addr.strip()
+    }
+    return normalized in valid_admins
 
 
 def _parse_dotenv_file(dotenv_path: Path) -> dict[str, str]:

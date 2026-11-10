@@ -18,13 +18,27 @@
 
   const ADMIN_EMAILS = [
     "dr.h.argentina@gmail.com",
-    "mendezdamian081@gmail.com"
+    "mendezdamian081@gmail.com",
+    // "slot3@gmail.com",
+    // "slot4@gmail.com",
+    // "slot5@gmail.com",
+    // "slot6@gmail.com",
+    // "slot7@gmail.com",
+    // "slot8@gmail.com",
+    // "slot9@gmail.com",
+    // "slot10@gmail.com",
+    // "slot11@gmail.com",
+    // "slot12@gmail.com"
   ];
 
   function isWhitelistedAdminEmail(email) {
     if (!email || typeof email !== "string") return false;
     const userEmail = email.trim().toLowerCase();
-    return ADMIN_EMAILS.includes(userEmail);
+    if (!userEmail) return false;
+    const validAdmins = ADMIN_EMAILS.filter(
+      (item) => typeof item === "string" && item.trim().length > 0
+    ).map((item) => item.trim().toLowerCase());
+    return validAdmins.includes(userEmail);
   }
 
   const FUERO_LABELS = {
@@ -184,12 +198,12 @@
     feedback.classList.remove("hidden");
   }
 
-  function isDeliverablesLocked() {
-    const userData = state.currentUser;
-    if (!userData) return false;
+  function isDeliverablesLocked(userProfile) {
+    const userData = userProfile || state.currentUser;
+    if (!userData) return true;
     const userEmail =
       typeof userData.email === "string" ? userData.email.trim().toLowerCase() : "";
-    return !ADMIN_EMAILS.includes(userEmail) && !userData.is_admin && !userData.has_paid_pass && !state.isSocialUnlocked;
+    return !isWhitelistedAdminEmail(userEmail) && !ADMIN_EMAILS.includes(userEmail) && !userData.has_paid_pass && !state.isSocialUnlocked;
   }
 
   function ensurePaymentButtonsVisible() {
@@ -220,18 +234,21 @@
     if (userProfile) {
       const userEmail =
         typeof userProfile.email === "string" ? userProfile.email.trim().toLowerCase() : "";
-      const isUserAdmin = Boolean(userProfile.is_admin || ADMIN_EMAILS.includes(userEmail));
+      const isUserAdmin = Boolean(isWhitelistedAdminEmail(userEmail) && ADMIN_EMAILS.includes(userEmail));
       userProfile.is_admin = isUserAdmin;
       if (isUserAdmin) {
         userProfile.has_paid_pass = true;
         userProfile.can_consult_free = true;
+      } else {
+        userProfile.is_admin = false;
+        userProfile.has_paid_pass = Boolean(userProfile.has_paid_pass === true || state.isSocialUnlocked === true);
       }
 
       if (authContainer) authContainer.classList.add("hidden");
       if (loginSection) loginSection.classList.add("hidden");
       if (workspace) workspace.classList.remove("hidden");
       if (adminToolbar) {
-        if (ADMIN_EMAILS.includes(userEmail)) {
+        if (isUserAdmin) {
           adminToolbar.classList.remove("hidden");
           adminToolbar.style.display = "flex";
         } else {
@@ -241,20 +258,24 @@
       }
       if (userBadge) {
         const badgeLabel = userProfile.name || userProfile.email || "Usuario Activo";
-        const quotaInfo = (userProfile.has_paid_pass || state.isSocialUnlocked)
-          ? " (Pase Completo / Social)"
-          : userProfile.can_consult_free
-          ? " (1 Consulta Gratis)"
-          : " (Consulta Usada)";
+        const quotaInfo = isUserAdmin
+          ? " (Admin Bonificado)"
+          : (userProfile.has_paid_pass || state.isSocialUnlocked)
+          ? " (Pase Activo)"
+          : " (Cuenta Estándar)";
         userBadge.textContent = `👤 ${badgeLabel}${quotaInfo}`;
         userBadge.classList.remove("hidden");
       }
       if (btnLogout) btnLogout.classList.remove("hidden");
 
-      // Si el usuario está bloqueado (no es admin y no pagó), mostrar el muro de pago y sus botones
+      // Si el usuario está bloqueado (no es admin y no pagó), ocultar admin-toolbar, bloquear entregables y mostrar los botones de pago
       const lockedAlert = document.getElementById("report-locked-alert");
       ensurePaymentButtonsVisible();
-      if (isDeliverablesLocked()) {
+      if (isDeliverablesLocked(userProfile)) {
+        if (adminToolbar) {
+          adminToolbar.classList.add("hidden");
+          adminToolbar.style.display = "none";
+        }
         if (paywallCard) {
           paywallCard.classList.remove("hidden");
           paywallCard.style.display = "block";

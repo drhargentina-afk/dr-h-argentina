@@ -48,7 +48,7 @@ from core.auth_oauth import (
     UserProfileResponse,
 )
 from core.case_tracker import CaseTrackerService
-from core.config import ApiKeyLeakGuardMiddleware
+from core.config import ADMIN_EMAILS, ApiKeyLeakGuardMiddleware, is_whitelisted_admin_email
 from core.database import DrHDatabase
 from core.models import (
     BoletinOficialNormInput,
@@ -341,7 +341,12 @@ async def analyze_expediente_endpoint(
         )
 
     # 2. Regla de Gratuidad: 1 sola consulta gratis por cuenta de Google
-    is_free_user = not user.is_admin and not user.has_paid_pass
+    normalized_user_email = str(user.email or "").strip().lower()
+    is_admin_whitelisted = bool(
+        is_whitelisted_admin_email(normalized_user_email)
+        or (user.is_admin and normalized_user_email == orchestrator.security_config.admin_user.strip().lower())
+    )
+    is_free_user = not is_admin_whitelisted and not user.has_paid_pass
     if is_free_user and user.free_consultations_used >= 1:
         raise HTTPException(
             status_code=status.HTTP_402_PAYMENT_REQUIRED,

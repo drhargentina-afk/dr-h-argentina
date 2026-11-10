@@ -158,8 +158,8 @@ class BaseRepositoryConsultant(ABC):
                     else "Código Civil y Comercial y Legislación Nacional Vigente"
                 ),
                 "explanation": (
-                    f"Análisis de tu consulta ('{citizen_query[:180]}') conforme a la normativa argentina vigente "
-                    f"del fuero {self.fuero_key.value}."
+                    "Tu consulta fue encuadrada dentro de la legislación argentina vigente para resguardar "
+                    "tus derechos procesales y patrimoniales antes de firmar o consentir cualquier actuación."
                 ),
                 "protection_tip": (
                     "Solicitá siempre copia íntegra de las actuaciones y verificá los plazos procesales antes de firmar cualquier escrito o acuerdo."
@@ -332,6 +332,50 @@ class BaseFueroAgent(ABC):
             "Plazos y Urgencia:\n"
             f"{cls.sanitize_criollo_paragraph(deadlines_and_urgency)}"
         )
+
+    @classmethod
+    def invoke_gemini_llm_strict(
+        cls,
+        *,
+        api_key: str,
+        query_text: str,
+        fuero_label: str,
+        province_label: str,
+        city_locality: str = "",
+        caratula: str = "",
+    ) -> str:
+        """Invoca directamente a la API real de Gemini y lanza RuntimeError si falla (sin fallbacks silenciosos)."""
+        if not api_key or len(api_key.strip()) < 16:
+            raise RuntimeError("GOOGLE_API_KEY ausente o inválida para conectar con Gemini.")
+
+        from google import genai
+
+        client = genai.Client(api_key=api_key.strip())
+        prompt = cls.build_strict_gemini_prompt(
+            query_text=query_text,
+            fuero_label=fuero_label,
+            province_label=province_label,
+            city_locality=city_locality,
+            caratula=caratula,
+        )
+
+        last_exc: Exception | None = None
+        for model_name in ("gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-3.1-flash-lite"):
+            try:
+                interaction = client.interactions.create(
+                    model=model_name,
+                    input=prompt,
+                    store=False,
+                )
+                llm_text = (getattr(interaction, "output_text", None) or "").strip()
+                if len(llm_text) >= 30:
+                    return llm_text
+                last_exc = RuntimeError(f"El modelo {model_name} devolvió una respuesta vacía o truncada.")
+            except Exception as exc:
+                last_exc = exc
+                continue
+
+        raise RuntimeError(f"Error de conexión con la API de Gemini: {last_exc}") from last_exc
 
     _RE_DATE = re.compile(
         r"\b(?:(\d{1,2})[/\-](\d{1,2})[/\-](20\d{2})|(20\d{2})[/\-](\d{1,2})[/\-](\d{1,2}))\b"

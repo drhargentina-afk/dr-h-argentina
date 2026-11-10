@@ -114,7 +114,7 @@ class ServerSecurityConfig(BaseModel):
     database_url: str = Field(default="", description="Ruta de base de datos SQLite o DATABASE_URL PostgreSQL.")
     node_country: str = Field(default="AR", min_length=2, max_length=2)
     platform_version: str = Field(default="1.4.0-AR-PWA", min_length=3)
-    gemini_model_primary: str = Field(default="gemini-2.5-flash", min_length=3)
+    gemini_model_primary: str = Field(default="gemini-3.5-flash-lite", min_length=3)
     rate_limit_free_rpm: int = Field(default=15, ge=1, le=120)
     rate_limit_max_retries: int = Field(default=5, ge=1, le=10)
     rate_limit_base_cooling_seconds: Decimal = Field(default=Decimal("1.50"), gt=Decimal("0.00"))

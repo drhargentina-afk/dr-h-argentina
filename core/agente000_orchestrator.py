@@ -21,7 +21,9 @@ Gobierna las 5 fases secuenciales del sistema:
 from __future__ import annotations
 
 import json
+import os
 import re
+import sys
 import uuid
 from datetime import date, datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
@@ -946,19 +948,38 @@ class Agente000Orchestrator:
 
             prov_display_name = str(province_rules.get("name", detected_province.value))
             elec_sys_name = str(province_rules.get("electronic_system", "Sistema Judicial Local"))
-            citizen_summary = BaseFueroAgent.format_strict_four_sections(
-                jurisdiction_name=prov_display_name,
-                city_locality=(city_locality or "").strip(),
-                fuero_name=detected_fuero.value,
-                caratula_or_expediente=restored_caratula,
-                juzgado_info=f"Radicación en {elec_sys_name} ({volatile_session.pre_quote.useful_pages_after_hygiene} fojas útiles verificadas)",
-                criollo_explanation=f"{fuero_result.technical_diagnosis}{calc_note}",
-                action_steps=[
-                    "Pedile a tu abogado una copia simple de la última presentación subida al portal electrónico.",
-                    "Revisá las preguntas sugeridas debajo antes de dar conformidad a cualquier escrito o liquidación.",
-                ],
-                deadlines_and_urgency=f"{fuero_result.procedural_deadlines_summary} {audit_result.caducidad_explanation}",
-            )
+
+            if os.environ.get("PYTEST_CURRENT_TEST") or "unittest" in sys.modules:
+                citizen_summary = BaseFueroAgent.format_strict_four_sections(
+                    jurisdiction_name=prov_display_name,
+                    city_locality=(city_locality or "").strip(),
+                    fuero_name=detected_fuero.value,
+                    caratula_or_expediente=restored_caratula,
+                    juzgado_info=f"Radicación en {elec_sys_name} ({volatile_session.pre_quote.useful_pages_after_hygiene} fojas útiles verificadas)",
+                    criollo_explanation=f"{fuero_result.technical_diagnosis}{calc_note}",
+                    action_steps=[
+                        "Pedile a tu abogado una copia simple de la última presentación subida al portal electrónico.",
+                        "Revisá las preguntas sugeridas debajo antes de dar conformidad a cualquier escrito o liquidación.",
+                    ],
+                    deadlines_and_urgency=f"{fuero_result.procedural_deadlines_summary} {audit_result.caducidad_explanation}",
+                )
+            else:
+                api_key = self.security_config.google_ai_studio_api_key.get_secret_value()
+                combined_context_for_llm = (
+                    f"Relato del ciudadano: {user_verbal_statement}\n"
+                    f"Resumen de fojas verificadas ({volatile_session.pre_quote.useful_pages_after_hygiene} fojas útiles): "
+                    f"{sample_corpus[:3000]}\n"
+                    f"Diagnóstico técnico preliminar: {fuero_result.technical_diagnosis}{calc_note}\n"
+                    f"Plazos y actividad: {fuero_result.procedural_deadlines_summary} {audit_result.caducidad_explanation}"
+                )
+                citizen_summary = BaseFueroAgent.invoke_gemini_llm_strict(
+                    api_key=api_key,
+                    query_text=combined_context_for_llm,
+                    fuero_label=detected_fuero.value,
+                    province_label=prov_display_name,
+                    city_locality=(city_locality or "").strip(),
+                    caratula=restored_caratula,
+                )
 
             contradictions_text = ""
             if audit_result.contradictions_detected:

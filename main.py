@@ -446,36 +446,21 @@ def _generate_dynamic_llm_legal_answer(
     fallback_answer: str,
     city_locality: str = "",
 ) -> str:
-    """Envía el prompt del ciudadano al LLM (Google GenAI) con estructura divisoria estricta de 4 secciones."""
+    """Envía el prompt del ciudadano directamente a la API de Gemini sin fallbacks silenciosos."""
     if os.environ.get("PYTEST_CURRENT_TEST") or "unittest" in sys.modules:
         return fallback_answer
-    try:
-        from google import genai
-        from agents_fueros.base_fuero_agent import BaseFueroAgent
 
-        api_key = orchestrator.security_config.google_ai_studio_api_key.get_secret_value()
-        if not api_key or len(api_key.strip()) < 16:
-            return fallback_answer
+    from agents_fueros.base_fuero_agent import BaseFueroAgent
 
-        client = genai.Client(api_key=api_key.strip())
-        prompt = BaseFueroAgent.build_strict_gemini_prompt(
-            query_text=query_text,
-            fuero_label=fuero.value,
-            province_label=province.value,
-            city_locality=city_locality,
-            caratula="Consulta ciudadana directa",
-        )
-        interaction = client.interactions.create(
-            model="gemini-3.8-flash",
-            input=prompt,
-            store=False,
-        )
-        llm_text = (getattr(interaction, "output_text", None) or "").strip()
-        if len(llm_text) >= 30:
-            return llm_text
-    except Exception as llm_exc:
-        _main_logger.warning("Aviso consulta LLM en tiempo real (usando motor determinista): %s", llm_exc)
-    return fallback_answer
+    api_key = orchestrator.security_config.google_ai_studio_api_key.get_secret_value()
+    return BaseFueroAgent.invoke_gemini_llm_strict(
+        api_key=api_key,
+        query_text=query_text,
+        fuero_label=fuero.value,
+        province_label=province.value,
+        city_locality=city_locality,
+        caratula="Consulta ciudadana directa",
+    )
 
 
 @app.post(

@@ -838,6 +838,81 @@ async def payments_social_unlock_endpoint(
     )
 
 
+class CommercialCheckoutRequest(BaseModel):
+    """Solicitud de inicio de pago comercial ($4.000 ARS micro o $20.000 ARS mensual)."""
+
+    model_config = ConfigDict(extra="forbid")
+    plan_type: Literal["micro", "monthly"] = Field(
+        default="monthly",
+        description="Tipo de plan comercial seleccionado: 'micro' ($4.000 ARS) o 'monthly' ($20.000 ARS).",
+    )
+
+
+class CommercialCheckoutResponse(BaseModel):
+    """Respuesta del endpoint de checkout comercial (redirección externa o acreditación sandbox)."""
+
+    model_config = ConfigDict(extra="forbid")
+    status: Literal["REDIRECT", "SANDBOX_APPROVED"]
+    mode: Literal["LIVE", "SANDBOX"]
+    plan_type: Literal["micro", "monthly"]
+    amount_ars: str
+    checkout_url: str
+    has_paid_pass: bool
+    message: str
+
+
+@app.post("/payments/checkout", response_model=CommercialCheckoutResponse, tags=["Monetización Dual"])
+async def payments_commercial_checkout_endpoint(
+    req: CommercialCheckoutRequest,
+    user: Annotated[UserProfileResponse, Depends(get_current_user)],
+) -> CommercialCheckoutResponse:
+    """Inicia el checkout comercial en Lemon Squeezy o ejecuta el checkout simulado/sandbox si las URLs reales aún no están en .env."""
+    cfg = orchestrator.security_config
+    configured_url = (
+        cfg.external_micro_payment_url
+        if req.plan_type == "micro"
+        else cfg.external_monthly_payment_url
+    ).strip()
+    amount_ars = "4000.00" if req.plan_type == "micro" else "20000.00"
+
+    is_placeholder_url = (
+        not configured_url
+        or "dr-h-argentina.onrender.com/#payment-" in configured_url
+        or configured_url.startswith("#")
+    )
+
+    if not is_placeholder_url:
+        return CommercialCheckoutResponse(
+            status="REDIRECT",
+            mode="LIVE",
+            plan_type=req.plan_type,
+            amount_ars=amount_ars,
+            checkout_url=configured_url,
+            has_paid_pass=user.has_paid_pass,
+            message="Redirigiendo a la pasarela de pago segura...",
+        )
+
+    # Si las URLs reales de Lemon Squeezy aún no están en .env, acreditar checkout simulado/sandbox
+    sandbox_pid = f"sandbox_{req.plan_type}_{hashlib.sha256(f'{user.email}:{req.plan_type}'.encode()).hexdigest()[:10]}"
+    db.apply_approved_payment(
+        payment_id=sandbox_pid,
+        user_email=user.email,
+        plan_type="PASE_COMPLETO",
+        amount_ars=amount_ars,
+        currency_id="ARS",
+    )
+    db.set_user_paid_pass(user.email, True)
+    return CommercialCheckoutResponse(
+        status="SANDBOX_APPROVED",
+        mode="SANDBOX",
+        plan_type=req.plan_type,
+        amount_ars=amount_ars,
+        checkout_url=configured_url or "https://www.lemonsqueezy.com/",
+        has_paid_pass=True,
+        message=f"Pago comercial (${amount_ars} ARS) procesado en modo Sandbox. Tu informe completo y descargables fueron desbloqueados.",
+    )
+
+
 # =========================================================================
 # SISTEMA, SALUD Y CRON 07:00 AM
 # =========================================================================

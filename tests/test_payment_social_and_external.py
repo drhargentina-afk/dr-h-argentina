@@ -196,10 +196,75 @@ class TestPaymentSocialAndExternal(unittest.TestCase):
         js_text = resp_js.text
         self.assertIn("/payments/social-unlock", js_text)
         self.assertIn("/payments/config", js_text)
+        self.assertIn("/payments/checkout", js_text)
+        self.assertIn("unlockDeliverablesBySocialShare", js_text)
+        self.assertIn("social_share_unlocked = true", js_text)
+        self.assertIn(
+            '"https://api.whatsapp.com/send?text=" + encodeURIComponent(shareText + " " + shareUrl)',
+            js_text,
+        )
+        self.assertIn(
+            "¡Texto copiado! Pegalo en tu Historia o publicación de Instagram",
+            js_text,
+        )
+        self.assertIn('window.open("https://www.instagram.com/", "_blank")', js_text)
+        self.assertIn("Redirigiendo al pago...", js_text)
+        self.assertNotIn("network.capitalize()", js_text)
         self.assertIn("initPrimerosPasosModal", js_text)
         self.assertIn("instagram", js_text)
         self.assertNotIn("mercadopago", js_text.lower())
         self.assertNotIn("create-preference", js_text)
+
+    def test_social_buttons_and_commercial_checkout_hide_paywall_and_unlock_deliverables(self) -> None:
+        """Verifica que el clic en cualquiera de los botones sociales o el checkout comercial
+        oculta el muro de pago y desbloquea los entregables del informe."""
+        resp_js = self.client.get("/app.js")
+        self.assertEqual(resp_js.status_code, 200)
+        js_text = resp_js.text
+
+        # 1. Verificar que los 5 botones sociales disparan triggerSocialShare -> unlockDeliverablesBySocialShare
+        for net_id, net_key in (
+            ("btn-share-whatsapp", "whatsapp"),
+            ("btn-share-facebook", "facebook"),
+            ("btn-share-instagram", "instagram"),
+            ("btn-share-x", "x"),
+            ("btn-share-threads", "threads"),
+        ):
+            self.assertIn(net_id, js_text)
+            self.assertIn(f'triggerSocialShare("{net_key}")', js_text)
+
+        # 2. Verificar que unlockDeliverablesBySocialShare oculta el muro y revela el informe y botones
+        self.assertIn('paywallCard.classList.add("hidden")', js_text)
+        self.assertIn('paywallCard.style.display = "none"', js_text)
+        self.assertIn('reportSection.classList.remove("hidden")', js_text)
+        self.assertIn('reportSection.style.display = "block"', js_text)
+        self.assertIn('unlockedDetails.classList.remove("hidden")', js_text)
+        self.assertIn('unlockedDetails.style.display = "flex"', js_text)
+
+        # 3. Verificar que POST /payments/checkout funciona para ambos planes ($4.000 ARS micro y $20.000 ARS monthly)
+        for plan_type, expected_amount in (("micro", "4000.00"), ("monthly", "20000.00")):
+            chk_tag = uuid.uuid4().hex[:6]
+            chk_email = f"checkout_{plan_type}_{chk_tag}@gmail.com"
+            chk_login = self.client.post(
+                "/auth/google",
+                json={"credential": f"mock_google_oauth:{chk_email}:Cliente Checkout"},
+            )
+            chk_headers = {"Authorization": f"Bearer {chk_login.json()['access_token']}"}
+
+            resp_chk = self.client.post(
+                "/payments/checkout",
+                json={"plan_type": plan_type},
+                headers=chk_headers,
+            )
+            self.assertEqual(resp_chk.status_code, 200)
+            chk_data = resp_chk.json()
+            self.assertEqual(chk_data["plan_type"], plan_type)
+            self.assertEqual(chk_data["amount_ars"], expected_amount)
+            self.assertTrue(chk_data["has_paid_pass"])
+
+            # Confirmar que el usuario quedó con pase desbloqueado y puede descargar PDF
+            resp_me = self.client.get("/auth/me", headers=chk_headers)
+            self.assertTrue(resp_me.json()["has_paid_pass"])
 
 
 if __name__ == "__main__":

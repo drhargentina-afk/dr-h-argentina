@@ -118,12 +118,35 @@
   // 1. CERO HUELLA & PERSISTENCIA EFÍMERA
   // =========================================================================
 
+  function purgePassAndAdminStorage() {
+    const keysToPurge = [
+      ADMIN_STORAGE_KEY,
+      "drh_active_user",
+      "drh_has_paid_pass",
+      "drh_is_admin",
+      "drh_social_unlocked",
+      "drh_bonificado",
+      "drh_free_pass",
+      "drh_demo_mode"
+    ];
+    try {
+      keysToPurge.forEach((k) => {
+        localStorage.removeItem(k);
+        sessionStorage.removeItem(k);
+      });
+    } catch (err) {
+      console.warn("Error purgando claves de pase/admin:", err);
+    }
+  }
+
   function clearAllStoredSessions() {
+    state.isSocialUnlocked = false;
+    state.currentUser = null;
+    state.lastFinalReport = null;
     try {
       sessionStorage.clear();
       localStorage.removeItem(TOKEN_STORAGE_KEY);
-      localStorage.removeItem(ADMIN_STORAGE_KEY);
-      localStorage.removeItem("drh_active_user");
+      purgePassAndAdminStorage();
     } catch (err) {
       console.warn("Error limpiando almacenamiento:", err);
     }
@@ -203,7 +226,7 @@
     if (!userData) return true;
     const userEmail =
       typeof userData.email === "string" ? userData.email.trim().toLowerCase() : "";
-    return !isWhitelistedAdminEmail(userEmail) && !ADMIN_EMAILS.includes(userEmail) && !userData.has_paid_pass && !state.isSocialUnlocked;
+    return !ADMIN_EMAILS.includes(userEmail) && !userData.has_paid_pass;
   }
 
   function ensurePaymentButtonsVisible() {
@@ -230,6 +253,7 @@
     const btnLogout = document.getElementById("btn-logout");
     const paywallCard = document.getElementById("social-paywall-card");
     const adminToolbar = document.getElementById("admin-toolbar");
+    const reportSection = document.getElementById("report-output-section");
 
     if (userProfile) {
       const userEmail =
@@ -240,15 +264,17 @@
         userProfile.has_paid_pass = true;
         userProfile.can_consult_free = true;
       } else {
+        purgePassAndAdminStorage();
+        state.isSocialUnlocked = false;
         userProfile.is_admin = false;
-        userProfile.has_paid_pass = Boolean(userProfile.has_paid_pass === true || state.isSocialUnlocked === true);
+        userProfile.has_paid_pass = Boolean(userProfile.has_paid_pass === true);
       }
 
       if (authContainer) authContainer.classList.add("hidden");
       if (loginSection) loginSection.classList.add("hidden");
       if (workspace) workspace.classList.remove("hidden");
       if (adminToolbar) {
-        if (isUserAdmin) {
+        if (ADMIN_EMAILS.includes(userEmail)) {
           adminToolbar.classList.remove("hidden");
           adminToolbar.style.display = "flex";
         } else {
@@ -258,20 +284,20 @@
       }
       if (userBadge) {
         const badgeLabel = userProfile.name || userProfile.email || "Usuario Activo";
-        const quotaInfo = isUserAdmin
-          ? " (Admin Bonificado)"
-          : (userProfile.has_paid_pass || state.isSocialUnlocked)
+        const quotaInfo = ADMIN_EMAILS.includes(userEmail)
+          ? " (Admin Autorizado)"
+          : userProfile.has_paid_pass
           ? " (Pase Activo)"
-          : " (Cuenta Estándar)";
+          : " (Cuenta Estándar - Sin Pase)";
         userBadge.textContent = `👤 ${badgeLabel}${quotaInfo}`;
         userBadge.classList.remove("hidden");
       }
       if (btnLogout) btnLogout.classList.remove("hidden");
 
-      // Si el usuario está bloqueado (no es admin y no pagó), ocultar admin-toolbar, bloquear entregables y mostrar los botones de pago
+      // Validación estricta contra el email actual: si !ADMIN_EMAILS.includes(userEmail) && !userData.has_paid_pass
       const lockedAlert = document.getElementById("report-locked-alert");
       ensurePaymentButtonsVisible();
-      if (isDeliverablesLocked(userProfile)) {
+      if (!ADMIN_EMAILS.includes(userEmail) && !userProfile.has_paid_pass) {
         if (adminToolbar) {
           adminToolbar.classList.add("hidden");
           adminToolbar.style.display = "none";
@@ -283,6 +309,10 @@
         if (lockedAlert) {
           lockedAlert.classList.remove("hidden");
           lockedAlert.style.display = "flex";
+        }
+        if (!state.lastFinalReport && reportSection) {
+          reportSection.classList.add("hidden");
+          reportSection.style.display = "none";
         }
       } else {
         if (paywallCard) {
@@ -333,6 +363,8 @@
       return;
     }
 
+    // Purgar cualquier sesión o flag previo en localStorage/sessionStorage antes de iniciar nueva cuenta
+    clearAllStoredSessions();
     showLoginFeedback("Validando sesión con Google...", "info");
     try {
       const resp = await fetch("/auth/google", {
@@ -781,6 +813,23 @@
           })
         ]);
 
+        if (scanResp.status === 402 || repoResp.status === 402) {
+          ensurePaymentButtonsVisible();
+          if (paywallCard) {
+            paywallCard.classList.remove("hidden");
+            paywallCard.style.display = "block";
+            paywallCard.scrollIntoView({ behavior: "smooth", block: "start" });
+          }
+          const errSource = repoResp.status === 402 ? repoResp : scanResp;
+          const errData = await errSource.json().catch(() => ({}));
+          const err402 = new Error(
+            errData.detail ||
+              "Ya utilizaste tu consulta gratuita de prueba. Habilitá tu pase para continuar."
+          );
+          err402.isUserFacing = true;
+          throw err402;
+        }
+
         if (!scanResp.ok || !repoResp.ok) {
           throw new Error(BUSY_SERVER_MESSAGE);
         }
@@ -840,6 +889,7 @@
         };
 
         renderUnifiedResponse(synthesizedReport);
+        await restoreActiveSession();
       }
 
       state.urgentPhotoMode = false;

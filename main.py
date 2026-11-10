@@ -432,6 +432,18 @@ async def emergency_scan_endpoint(
     _user: Annotated[UserProfileResponse, Depends(get_current_user)],
 ) -> EmergencyScanResponse:
     """Escáner '¡No Firmes Todavía!' para cláusulas de renuncia o resoluciones urgentes."""
+    normalized_user_email = str(_user.email or "").strip().lower()
+    is_admin_whitelisted = bool(
+        is_whitelisted_admin_email(normalized_user_email)
+        or (_user.is_admin and normalized_user_email == orchestrator.security_config.admin_user.strip().lower())
+    )
+    is_free_user = not is_admin_whitelisted and not _user.has_paid_pass
+    if is_free_user and _user.free_consultations_used >= 1:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail="Ya utilizaste tu consulta gratuita de prueba. Habilitá tu pase para continuar.",
+        )
+
     try:
         return orchestrator.run_emergency_scan(request)
     except ValueError as exc:
@@ -479,6 +491,18 @@ async def repository_consult_endpoint(
     _user: Annotated[UserProfileResponse, Depends(get_current_user)],
 ) -> RepositoryConsultResponse:
     """Consulta normativa y generación de respuesta dinámica con IA en lenguaje claro."""
+    normalized_user_email = str(_user.email or "").strip().lower()
+    is_admin_whitelisted = bool(
+        is_whitelisted_admin_email(normalized_user_email)
+        or (_user.is_admin and normalized_user_email == orchestrator.security_config.admin_user.strip().lower())
+    )
+    is_free_user = not is_admin_whitelisted and not _user.has_paid_pass
+    if is_free_user and _user.free_consultations_used >= 1:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail="Ya utilizaste tu consulta gratuita de prueba. Habilitá tu pase para continuar.",
+        )
+
     try:
         base_resp = orchestrator.consult_normative_repository(request)
         dynamic_answer = _generate_dynamic_llm_legal_answer(
@@ -489,6 +513,8 @@ async def repository_consult_endpoint(
             fallback_answer=base_resp.citizen_clear_answer,
             city_locality=request.city_locality,
         )
+        if is_free_user:
+            db.increment_free_consultations(_user.email)
         return RepositoryConsultResponse(
             classified_fuero=base_resp.classified_fuero,
             province_jurisdiction=base_resp.province_jurisdiction,

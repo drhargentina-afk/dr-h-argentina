@@ -41,9 +41,9 @@ class UserProfileResponse(BaseModel):
     email: str
     name: str
     picture: str
-    free_consultations_used: int
-    has_paid_pass: bool
-    can_consult_free: bool
+    free_consultations_used: int = 0
+    has_paid_pass: bool = False
+    can_consult_free: bool = False
     is_admin: bool = False
 
 
@@ -140,6 +140,11 @@ class GoogleOAuthManager:
         if is_admin:
             self.db.set_user_paid_pass(email, True)
             user_row = self.db.get_user_by_email(email) or user_row
+        else:
+            has_webhook_payment = self.db.has_approved_webhook_payment(email)
+            if not has_webhook_payment:
+                self.db.set_user_paid_pass(email, False)
+                user_row = self.db.get_user_by_email(email) or user_row
 
         self.db.create_session(
             token=token,
@@ -149,7 +154,7 @@ class GoogleOAuthManager:
         )
 
         free_used = int(user_row["free_consultations_used"])
-        db_has_paid = int(user_row["has_paid_pass"]) == 1
+        db_has_paid = bool(int(user_row["has_paid_pass"]) == 1) if not is_admin else True
         has_paid = bool(is_admin or db_has_paid)
         can_free = bool(is_admin or ((free_used == 0) and not has_paid))
 

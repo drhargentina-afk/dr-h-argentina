@@ -331,10 +331,42 @@ class TestMvpRefactorRoadmap(unittest.TestCase):
         self.assertFalse(common_user["has_paid_pass"])
 
         common_token = resp_common.json()["access_token"]
-        resp_me_common = self.client.get("/auth/me", headers={"Authorization": f"Bearer {common_token}"})
+        common_headers = {"Authorization": f"Bearer {common_token}"}
+        resp_me_common = self.client.get("/auth/me", headers=common_headers)
         self.assertEqual(resp_me_common.status_code, 200)
         self.assertFalse(resp_me_common.json()["is_admin"])
         self.assertFalse(resp_me_common.json()["has_paid_pass"])
+
+        # 4. Verificar que si se ensucia la DB con has_paid_pass=1 para un no-admin, reset_non_admin_users lo limpie a False
+        db.set_user_paid_pass(common_email, True)
+        db.reset_non_admin_users(ADMIN_EMAILS)
+        row_after_reset = db.get_user_by_email(common_email)
+        self.assertIsNotNone(row_after_reset)
+        self.assertEqual(int(row_after_reset["has_paid_pass"]), 0)
+        self.assertEqual(int(row_after_reset["is_admin"]), 0)
+
+        # 5. Verificar que las consultas de texto (/repository-consult) también consuman la única consulta y bloqueen con HTTP 402 la segunda
+        u_tag = uuid.uuid4().hex[:6]
+        text_user_email = f"texto.comun.{u_tag}@gmail.com"
+        resp_txt_login = self.client.post(
+            "/auth/google",
+            json={"credential": f"mock_google_oauth:{text_user_email}:Usuario Texto"},
+        )
+        txt_headers = {"Authorization": f"Bearer {resp_txt_login.json()['access_token']}"}
+
+        resp_txt_1 = self.client.post(
+            "/repository-consult",
+            json={"query": "Me despidieron sin causa y quiero saber qué hacer", "province_jurisdiction": "PJN_NACION_CABA"},
+            headers=txt_headers,
+        )
+        self.assertEqual(resp_txt_1.status_code, 200)
+
+        resp_txt_2 = self.client.post(
+            "/repository-consult",
+            json={"query": "Segunda consulta de texto sin pagar", "province_jurisdiction": "PJN_NACION_CABA"},
+            headers=txt_headers,
+        )
+        self.assertEqual(resp_txt_2.status_code, 402)
 
 
 if __name__ == "__main__":

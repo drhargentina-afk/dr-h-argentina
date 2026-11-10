@@ -45,6 +45,7 @@ class DrHDatabase:
                     picture TEXT DEFAULT '',
                     free_consultations_used INTEGER NOT NULL DEFAULT 0,
                     has_paid_pass INTEGER NOT NULL DEFAULT 0,
+                    is_admin INTEGER NOT NULL DEFAULT 0,
                     created_at_iso TEXT NOT NULL,
                     updated_at_iso TEXT NOT NULL
                 );
@@ -110,6 +111,60 @@ class DrHDatabase:
                 CREATE INDEX IF NOT EXISTS idx_payments_email ON payments(user_email);
                 """
             )
+            # Asegurar columna is_admin en bases existentes con default 0 (False)
+            cols = [r["name"] for r in conn.execute("PRAGMA table_info(users);").fetchall()]
+            if "is_admin" not in cols:
+                conn.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0;")
+
+        from core.config import ADMIN_EMAILS
+
+        self.reset_non_admin_users(ADMIN_EMAILS)
+
+    def reset_non_admin_users(self, admin_emails: list[str] | tuple[str, ...]) -> dict[str, int]:
+        """Pone has_paid_pass = 0 (False) e is_admin = 0 (False) a todos los registros cuyo email NO esté en ADMIN_EMAILS."""
+        valid_admins = [
+            e.strip().lower()
+            for e in admin_emails
+            if isinstance(e, str) and e.strip()
+        ]
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as conn:
+            if valid_admins:
+                placeholders = ",".join("?" for _ in valid_admins)
+                cur_users = conn.execute(
+                    f"""
+                    UPDATE users
+                    SET has_paid_pass = 0, is_admin = 0, updated_at_iso = ?
+                    WHERE LOWER(TRIM(email)) NOT IN ({placeholders})
+                    """,
+                    [now, *valid_admins],
+                )
+                cur_sessions = conn.execute(
+                    f"""
+                    UPDATE user_sessions
+                    SET is_admin = 0
+                    WHERE LOWER(TRIM(user_email)) NOT IN ({placeholders})
+                    """,
+                    [*valid_admins],
+                )
+                conn.execute(
+                    f"""
+                    UPDATE users
+                    SET has_paid_pass = 1, is_admin = 1, updated_at_iso = ?
+                    WHERE LOWER(TRIM(email)) IN ({placeholders})
+                    """,
+                    [now, *valid_admins],
+                )
+            else:
+                cur_users = conn.execute(
+                    "UPDATE users SET has_paid_pass = 0, is_admin = 0, updated_at_iso = ?",
+                    (now,),
+                )
+                cur_sessions = conn.execute("UPDATE user_sessions SET is_admin = 0")
+            return {
+                "users_reset": cur_users.rowcount,
+                "sessions_reset": cur_sessions.rowcount,
+            }
 
     def reset_for_tests(self) -> None:
         """Limpia las tablas para tests unitarios e integración."""
@@ -147,8 +202,8 @@ class DrHDatabase:
                     """
                     INSERT INTO users (
                         google_id, email, name, picture, free_consultations_used,
-                        has_paid_pass, created_at_iso, updated_at_iso
-                    ) VALUES (?, ?, ?, ?, 0, 0, ?, ?)
+                        has_paid_pass, is_admin, created_at_iso, updated_at_iso
+                    ) VALUES (?, ?, ?, ?, 0, 0, 0, ?, ?)
                     """,
                     (google_id, clean_email, name.strip(), picture, now, now),
                 )
@@ -184,7 +239,7 @@ class DrHDatabase:
             row = conn.execute("SELECT free_consultations_used FROM users WHERE email = ?", (clean_email,)).fetchone()
             return int(row["free_consultations_used"]) if row else 1
 
-    def set_user_paid_pass(self, email: str, has_paid: bool = True) -> None:
+    def set_user_paid_pass(self, email: str, has_paid: bool = False) -> None:
         clean_email = email.strip().lower()
         now = datetime.now(timezone.utc).isoformat()
         with self._connect() as conn:
@@ -196,6 +251,24 @@ class DrHDatabase:
                 """,
                 (1 if has_paid else 0, now, clean_email),
             )
+
+    def has_approved_webhook_payment(self, email: str) -> bool:
+        """Verifica si el usuario tiene un pago real acreditado por webhook en la tabla payments."""
+        clean_email = email.strip().lower()
+        if not clean_email:
+            return False
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM payments
+                WHERE LOWER(TRIM(user_email)) = ?
+                  AND mp_status = 'approved'
+                  AND benefit_applied = 1
+                LIMIT 1
+                """,
+                (clean_email,),
+            ).fetchone()
+            return row is not None
 
     # --- PAGOS MERCADO PAGO (IDEMPOTENTES) ---
     def apply_approved_payment(

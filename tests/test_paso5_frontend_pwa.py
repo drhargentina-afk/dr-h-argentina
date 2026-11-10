@@ -60,6 +60,12 @@ class TestPaso5FrontendPwaAndRateLimiter(unittest.TestCase):
         self.assertIn('id="btn-download-pdf"', resp_index.text)
         self.assertIn('id="cases-dashboard-section"', resp_index.text)
         self.assertIn('id="social-paywall-card"', resp_index.text)
+        self.assertLess(
+            resp_index.text.index('id="title-unified-input"'),
+            resp_index.text.index('id="social-paywall-card"'),
+            "El bloque 'Hacé tu consulta en un solo lugar' debe aparecer antes del Muro de Pago.",
+        )
+        self.assertIn('id="report-unlocked-details"', resp_index.text)
         self.assertIn('id="btn-share-whatsapp"', resp_index.text)
         self.assertIn('id="btn-share-instagram"', resp_index.text)
         self.assertIn('id="btn-pay-external"', resp_index.text)

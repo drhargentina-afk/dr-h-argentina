@@ -294,14 +294,33 @@
       }
       if (btnLogout) btnLogout.classList.remove("hidden");
 
-      // Validación estricta contra el email actual: si !ADMIN_EMAILS.includes(userEmail) && !userData.has_paid_pass
+      // Al iniciar sesión o cargar la página (antes de consultar), el Muro de Pago permanece oculto
+      // para que lo primero que vea el usuario sea "Hacé tu consulta en un solo lugar".
       const lockedAlert = document.getElementById("report-locked-alert");
+      const unlockedDetails = document.getElementById("report-unlocked-details");
       ensurePaymentButtonsVisible();
+
       if (!ADMIN_EMAILS.includes(userEmail) && !userProfile.has_paid_pass) {
         if (adminToolbar) {
           adminToolbar.classList.add("hidden");
           adminToolbar.style.display = "none";
         }
+      }
+
+      if (!state.lastFinalReport) {
+        if (paywallCard) {
+          paywallCard.classList.add("hidden");
+          paywallCard.style.display = "none";
+        }
+        if (lockedAlert) {
+          lockedAlert.classList.add("hidden");
+          lockedAlert.style.display = "none";
+        }
+        if (reportSection) {
+          reportSection.classList.add("hidden");
+          reportSection.style.display = "none";
+        }
+      } else if (isDeliverablesLocked(userProfile)) {
         if (paywallCard) {
           paywallCard.classList.remove("hidden");
           paywallCard.style.display = "block";
@@ -310,9 +329,9 @@
           lockedAlert.classList.remove("hidden");
           lockedAlert.style.display = "flex";
         }
-        if (!state.lastFinalReport && reportSection) {
-          reportSection.classList.add("hidden");
-          reportSection.style.display = "none";
+        if (unlockedDetails) {
+          unlockedDetails.classList.add("hidden");
+          unlockedDetails.style.display = "none";
         }
       } else {
         if (paywallCard) {
@@ -322,6 +341,14 @@
         if (lockedAlert) {
           lockedAlert.classList.add("hidden");
           lockedAlert.style.display = "none";
+        }
+        if (reportSection) {
+          reportSection.classList.remove("hidden");
+          reportSection.style.display = "block";
+        }
+        if (unlockedDetails) {
+          unlockedDetails.classList.remove("hidden");
+          unlockedDetails.style.display = "flex";
         }
       }
 
@@ -636,11 +663,13 @@
       emailText.value = buildFormalEmailText(report, fueroReadable);
     }
 
-    // Scroll suave hacia los resultados y asegurar visibilidad del paywall si está bloqueado
+    // Disparar el Muro de Pago SOLO después de procesar la consulta si el usuario está bloqueado
     const paywallCard = document.getElementById("social-paywall-card");
     const lockedAlert = document.getElementById("report-locked-alert");
+    const unlockedDetails = document.getElementById("report-unlocked-details");
     ensurePaymentButtonsVisible();
-    if (isDeliverablesLocked()) {
+
+    if (isDeliverablesLocked(state.currentUser) === true) {
       if (paywallCard) {
         paywallCard.classList.remove("hidden");
         paywallCard.style.display = "block";
@@ -649,8 +678,26 @@
         lockedAlert.classList.remove("hidden");
         lockedAlert.style.display = "flex";
       }
+      if (unlockedDetails) {
+        unlockedDetails.classList.add("hidden");
+        unlockedDetails.style.display = "none";
+      }
+      paywallCard?.scrollIntoView({ behavior: "smooth", block: "start" });
+    } else {
+      if (paywallCard) {
+        paywallCard.classList.add("hidden");
+        paywallCard.style.display = "none";
+      }
+      if (lockedAlert) {
+        lockedAlert.classList.add("hidden");
+        lockedAlert.style.display = "none";
+      }
+      if (unlockedDetails) {
+        unlockedDetails.classList.remove("hidden");
+        unlockedDetails.style.display = "flex";
+      }
+      reportSection?.scrollIntoView({ behavior: "smooth", block: "start" });
     }
-    reportSection?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   // =========================================================================
@@ -1361,16 +1408,25 @@
             statusBox.className = "state-banner success";
             statusBox.textContent = "🎉 ¡Acceso Desbloqueado! Gracias por difundir Dr. H en redes. Ya podés leer tu dictamen completo y descargar tu informe.";
           }
-          // Actualizar vista
+          // Ocultar el muro y revelar el informe completo y sus descargables
           setLoggedInView(state.currentUser);
+          const reportSection = document.getElementById("report-output-section");
+          reportSection?.scrollIntoView({ behavior: "smooth", block: "start" });
         }
       } catch (err) {
         // Resiliencia: si está autenticado, desbloquear en cliente
         state.isSocialUnlocked = true;
+        if (state.currentUser) {
+          state.currentUser.has_paid_pass = true;
+          state.currentUser.can_consult_free = true;
+        }
         if (statusBox) {
           statusBox.className = "state-banner success";
           statusBox.textContent = "🎉 ¡Acceso Desbloqueado! Ya podés leer tu dictamen y acceder a todas las funciones.";
         }
+        setLoggedInView(state.currentUser);
+        const reportSection = document.getElementById("report-output-section");
+        reportSection?.scrollIntoView({ behavior: "smooth", block: "start" });
       }
     }
 
@@ -1448,6 +1504,7 @@
     const paywallCard = document.getElementById("social-paywall-card");
     const lockedAlert = document.getElementById("report-locked-alert");
     const reportSection = document.getElementById("report-output-section");
+    const unlockedDetails = document.getElementById("report-unlocked-details");
 
     if (btnAdminFree) {
       btnAdminFree.addEventListener("click", (e) => {
@@ -1459,6 +1516,10 @@
         if (lockedAlert) {
           lockedAlert.classList.remove("hidden");
           lockedAlert.style.display = "flex";
+        }
+        if (unlockedDetails) {
+          unlockedDetails.classList.add("hidden");
+          unlockedDetails.style.display = "none";
         }
         if (reportSection) {
           reportSection.classList.add("hidden");
@@ -1477,6 +1538,10 @@
         if (lockedAlert) {
           lockedAlert.classList.add("hidden");
           lockedAlert.style.display = "none";
+        }
+        if (unlockedDetails) {
+          unlockedDetails.classList.remove("hidden");
+          unlockedDetails.style.display = "flex";
         }
         if (reportSection) {
           reportSection.classList.remove("hidden");

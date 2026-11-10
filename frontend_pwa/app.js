@@ -185,16 +185,26 @@
   }
 
   function isDeliverablesLocked() {
-    if (!state.currentUser) return false;
-    if (
-      state.currentUser.is_admin ||
-      isWhitelistedAdminEmail(state.currentUser.email) ||
-      state.currentUser.has_paid_pass ||
-      state.isSocialUnlocked
-    ) {
-      return false;
+    const userData = state.currentUser;
+    if (!userData) return false;
+    const userEmail =
+      typeof userData.email === "string" ? userData.email.trim().toLowerCase() : "";
+    return !ADMIN_EMAILS.includes(userEmail) && !userData.is_admin && !userData.has_paid_pass && !state.isSocialUnlocked;
+  }
+
+  function ensurePaymentButtonsVisible() {
+    const btnPayMicro = document.getElementById("btn-pay-micro");
+    const btnPayMonthly = document.getElementById("btn-pay-monthly");
+    if (btnPayMicro) {
+      btnPayMicro.classList.remove("hidden");
+      btnPayMicro.style.display = "flex";
+      btnPayMicro.disabled = false;
     }
-    return !state.currentUser.can_consult_free || state.currentUser.free_consultations_used >= 1;
+    if (btnPayMonthly) {
+      btnPayMonthly.classList.remove("hidden");
+      btnPayMonthly.style.display = "flex";
+      btnPayMonthly.disabled = false;
+    }
   }
 
   function setLoggedInView(userProfile) {
@@ -241,14 +251,27 @@
       }
       if (btnLogout) btnLogout.classList.remove("hidden");
 
-      // Si consumió la prueba gratuita y no tiene pase activo, mostrar el muro social y alerta de bloqueo
+      // Si el usuario está bloqueado (no es admin y no pagó), mostrar el muro de pago y sus botones
       const lockedAlert = document.getElementById("report-locked-alert");
+      ensurePaymentButtonsVisible();
       if (isDeliverablesLocked()) {
-        if (paywallCard) paywallCard.classList.remove("hidden");
-        if (lockedAlert) lockedAlert.classList.remove("hidden");
+        if (paywallCard) {
+          paywallCard.classList.remove("hidden");
+          paywallCard.style.display = "block";
+        }
+        if (lockedAlert) {
+          lockedAlert.classList.remove("hidden");
+          lockedAlert.style.display = "flex";
+        }
       } else {
-        if (paywallCard) paywallCard.classList.add("hidden");
-        if (lockedAlert) lockedAlert.classList.add("hidden");
+        if (paywallCard) {
+          paywallCard.classList.add("hidden");
+          paywallCard.style.display = "none";
+        }
+        if (lockedAlert) {
+          lockedAlert.classList.add("hidden");
+          lockedAlert.style.display = "none";
+        }
       }
 
       // Cargar causas del usuario
@@ -560,7 +583,20 @@
       emailText.value = buildFormalEmailText(report, fueroReadable);
     }
 
-    // Scroll suave hacia los resultados
+    // Scroll suave hacia los resultados y asegurar visibilidad del paywall si está bloqueado
+    const paywallCard = document.getElementById("social-paywall-card");
+    const lockedAlert = document.getElementById("report-locked-alert");
+    ensurePaymentButtonsVisible();
+    if (isDeliverablesLocked()) {
+      if (paywallCard) {
+        paywallCard.classList.remove("hidden");
+        paywallCard.style.display = "block";
+      }
+      if (lockedAlert) {
+        lockedAlert.classList.remove("hidden");
+        lockedAlert.style.display = "flex";
+      }
+    }
     reportSection?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
@@ -672,8 +708,10 @@
         }
 
         if (resp.status === 402) {
+          ensurePaymentButtonsVisible();
           if (paywallCard) {
             paywallCard.classList.remove("hidden");
+            paywallCard.style.display = "block";
             paywallCard.scrollIntoView({ behavior: "smooth", block: "start" });
           }
           const errData = await resp.json().catch(() => ({}));
@@ -789,13 +827,26 @@
         "¡Análisis completo! Abajo tenés el dictamen y los botones de acción rápida."
       );
     } catch (err) {
+      clearInterval(loadingIntervalId);
+      const spinner = document.getElementById("consultation-loading-spinner");
+      if (spinner) {
+        spinner.classList.add("hidden");
+      }
+      if (btnConsult) {
+        btnConsult.disabled = false;
+        btnConsult.textContent = originalBtnText;
+      }
       const isServerError = !err || !err.isUserFacing;
-      updateConsultationBanner(
-        "error",
-        isServerError ? BUSY_SERVER_MESSAGE : `Aviso: ${err.message}`
-      );
+      const errorMsg = isServerError
+        ? BUSY_SERVER_MESSAGE
+        : `Aviso: ${err.message}`;
+      updateConsultationBanner("error", errorMsg);
     } finally {
       clearInterval(loadingIntervalId);
+      const spinner = document.getElementById("consultation-loading-spinner");
+      if (spinner) {
+        spinner.classList.add("hidden");
+      }
       if (btnConsult) {
         btnConsult.disabled = false;
         btnConsult.textContent = originalBtnText;
@@ -810,8 +861,10 @@
   function promptSocialPaywall(actionLabel) {
     const paywallCard = document.getElementById("social-paywall-card");
     const statusBox = document.getElementById("payment-status-feedback");
+    ensurePaymentButtonsVisible();
     if (paywallCard) {
       paywallCard.classList.remove("hidden");
+      paywallCard.style.display = "block";
       paywallCard.scrollIntoView({ behavior: "smooth", block: "start" });
     }
     if (statusBox) {

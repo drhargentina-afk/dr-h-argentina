@@ -20,6 +20,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import re
 import sys
 from typing import Annotated, Any, Literal
 
@@ -991,8 +992,50 @@ async def repository_consult_endpoint(
         ) from exc
 
 
+_RE_EXPEDIENTE_REPORT_CONTEXT = re.compile(
+    r"\b(?:expediente|expte\.?|foja|fojas|fs\.?|juzgado|tribunal|c[aá]mara|c[eé]dula|autos\s+caratulados|sentencia|resoluci[oó]n\s+judicial)\b",
+    re.IGNORECASE,
+)
+
+_RE_GENERIC_PROCEDURAL_QUESTION = re.compile(
+    r"(?:estado\s+actual\s+de\s+la\s+causa|pr[oó]xima\s+foja|pr[oó]xima\s+presentaci[oó]n|estado\s+actual\s+del\s+tr[aá]mite)",
+    re.IGNORECASE,
+)
+
+
+def _is_factual_non_expediente_payload(payload: dict[str, Any]) -> bool:
+    """Detecta si el dictamen proviene de una consulta ciudadana de hecho sin expediente judicial ni fojas."""
+    if payload.get("has_expediente") is False:
+        return True
+    raw_cards = payload.get("verified_timeline_cards")
+    card_texts: list[str] = []
+    if isinstance(raw_cards, list):
+        for item in raw_cards:
+            if isinstance(item, dict):
+                piece_type = str(item.get("document_piece_type") or "").strip().lower()
+                if piece_type in {
+                    "consulta ciudadana",
+                    "consulta ciudadana en lenguaje claro",
+                    "consulta directa en lenguaje claro",
+                    "documento escaneado de urgencia",
+                }:
+                    return True
+                card_texts.append(str(item.get("document_piece_type") or ""))
+                card_texts.append(str(item.get("verbatim_excerpt") or ""))
+
+    combined_context = " ".join(
+        [
+            str(payload.get("citizen_plain_summary") or ""),
+            str(payload.get("audit_and_deadlines_section") or ""),
+            *card_texts,
+        ]
+    )
+    return not bool(_RE_EXPEDIENTE_REPORT_CONTEXT.search(combined_context))
+
+
 def _coerce_final_citizen_report(payload: dict[str, Any]) -> FinalCitizenReport:
     """Normaliza cualquier dictamen (completo o consulta verbal rápida) a un FinalCitizenReport válido."""
+    is_factual_no_expediente = _is_factual_non_expediente_payload(payload)
     raw_id = str(payload.get("report_id") or "").strip()
     report_id = raw_id if len(raw_id) >= 8 else f"drh-rep-{hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()[:8]}"
 
@@ -1007,22 +1050,31 @@ def _coerce_final_citizen_report(payload: dict[str, Any]) -> FinalCitizenReport:
     audit_section = (
         raw_audit
         if len(raw_audit) >= 20
-        else f"{raw_audit} Plazos procesales y días de nota sujetos al código procesal aplicable.".strip()
+        else (
+            f"{raw_audit} Evaluá intimación extrajudicial, carta documento, denuncia o mediación sin demorar la conservación de pruebas.".strip()
+            if is_factual_no_expediente
+            else f"{raw_audit} Plazos procesales y días de nota sujetos al código procesal aplicable.".strip()
+        )
     )
 
     raw_audio = str(payload.get("audio_script_90_seconds") or "").strip()
     audio_script = (
         raw_audio
         if len(raw_audio) >= 80
-        else f"{citizen_plain_summary} Recordá solicitar siempre copia íntegra de toda presentación antes de firmar cualquier escrito o acuerdo judicial."
+        else (
+            f"{citizen_plain_summary} Recordá reunir las pruebas del hecho y consultar si conviene enviar intimación extrajudicial, carta documento, denuncia o iniciar mediación."
+            if is_factual_no_expediente
+            else f"{citizen_plain_summary} Recordá solicitar siempre copia íntegra de toda presentación antes de firmar cualquier escrito o acuerdo judicial."
+        )
     )
 
     raw_wa = str(payload.get("whatsapp_ready_message") or "").strip()
-    whatsapp_msg = (
-        raw_wa
-        if len(raw_wa) >= 40
+    default_wa = (
+        "Hola Doc, necesito asesoramiento por un hecho concreto sin expediente iniciado: ¿conviene enviar una carta documento o intimación extrajudicial, hacer una denuncia o pedir mediación, y qué pruebas debería juntar primero?"
+        if is_factual_no_expediente
         else "Hola Doc, le escribo para consultarle cómo sigue el trámite, qué plazos tenemos por delante y solicitarle copia de la última presentación."
     )
+    whatsapp_msg = raw_wa if len(raw_wa) >= 40 else default_wa
 
     raw_disclaimer = str(payload.get("legal_shield_disclaimer") or "").strip()
     disclaimer = (
@@ -1079,8 +1131,20 @@ def _coerce_final_citizen_report(payload: dict[str, Any]) -> FinalCitizenReport:
 
     raw_questions = payload.get("questions_for_your_lawyer")
     questions: list[str] = [str(q).strip() for q in raw_questions if str(q).strip()] if isinstance(raw_questions, list) else []
-    while len(questions) < 2:
-        questions.append("¿Cuál es el estado actual del trámite y qué plazo legal rige para la próxima presentación?")
+    if is_factual_no_expediente:
+        questions = [q for q in questions if not _RE_GENERIC_PROCEDURAL_QUESTION.search(q)]
+        factual_fallbacks = [
+            "Según los hechos relatados, ¿conviene enviar primero una intimación extrajudicial / carta documento o iniciar una denuncia o mediación directa?",
+            "¿Qué pruebas concretas (fotos, videos, mensajes, actas o testigos) necesito reunir antes de formalizar el reclamo?",
+        ]
+        for fb in factual_fallbacks:
+            if len(questions) >= 2:
+                break
+            if fb not in questions:
+                questions.append(fb)
+    else:
+        while len(questions) < 2:
+            questions.append("¿Cuál es el estado actual del trámite y qué plazo legal rige para la próxima presentación?")
 
     fuero_val = str(payload.get("fuero") or FueroKey.LABORAL.value)
     try:

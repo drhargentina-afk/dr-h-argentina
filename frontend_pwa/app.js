@@ -125,30 +125,143 @@
       .trim();
   }
 
+  const EXPEDIENTE_CONTEXT_REGEX =
+    /\b(?:expediente|expte\.?|foja|fojas|fs\.?|juzgado|tribunal|c[aá]mara|c[eé]dula|autos\s+caratulados|demanda\s+judicial|sentencia|resoluci[oó]n\s+judicial)\b/i;
+
+  function hasJudicialExpedienteReference(queryText, pdfBlob, report) {
+    if (pdfBlob) return true;
+    if (report && typeof report.has_expediente === "boolean") {
+      return report.has_expediente;
+    }
+    if (EXPEDIENTE_CONTEXT_REGEX.test(String(queryText || ""))) {
+      return true;
+    }
+    if (report) {
+      const firstPieceType = String(
+        report.verified_timeline_cards?.[0]?.document_piece_type || ""
+      )
+        .trim()
+        .toLowerCase();
+      const directConsultationTypes = [
+        "consulta ciudadana",
+        "consulta ciudadana en lenguaje claro",
+        "consulta directa en lenguaje claro",
+        "documento escaneado de urgencia"
+      ];
+      if (directConsultationTypes.includes(firstPieceType)) {
+        return false;
+      }
+      const combined = [
+        report.citizen_plain_summary || "",
+        report.audit_and_deadlines_section || "",
+        report.verified_timeline_cards?.[0]?.document_piece_type || "",
+        report.verified_timeline_cards?.[0]?.verbatim_excerpt || ""
+      ].join(" ");
+      return EXPEDIENTE_CONTEXT_REGEX.test(combined);
+    }
+    return false;
+  }
+
+  function buildContextualCitizenDeliverables(queryText, fuero, doNotSign, hasExpediente) {
+    if (hasExpediente) {
+      return {
+        questions: [
+          "¿Cuál es el estado actual de la causa y qué plazo legal rige para la próxima foja?",
+          "Antes de firmar o consentir un acuerdo, ¿me puede enviar una copia completa por este medio?",
+          "¿La tasa de justicia o gastos solicitados cuentan con constancia o exención por beneficio de litigar sin gastos?"
+        ],
+        whatsappMessage: doNotSign
+          ? "Hola Doc, antes de firmar o avanzar con lo propuesto, prefiero que me pase una copia completa para leerla con tranquilidad y revisar los puntos del acuerdo. ¡Muchas gracias!"
+          : "Hola Doc, le escribo para consultarle cómo sigue el trámite, qué plazos tenemos por delante y si necesita que le acerque alguna documentación adicional. ¡Muchas gracias!"
+      };
+    }
+
+    const normalizedQuery = String(queryText || "").toLowerCase();
+    const isNeighborOrNoiseIssue =
+      /(ruid|molest|vecin|c[aá]mara|grab|vigilanc|consorcio|humedad|medianera|administraci[oó]n|m[uú]sica|ladrido)/i.test(
+        normalizedQuery
+      );
+    const isLaborFactIssue =
+      fuero === "03_laboral" ||
+      /(despido|despid|ech[oó]|verbal|en\s+negro|no\s+registr|empleador|patr[oó]n|telegrama|sueldo|aguinaldo|art\b)/i.test(
+        normalizedQuery
+      );
+
+    if (isNeighborOrNoiseIssue) {
+      return {
+        questions: [
+          "Con los hechos que describí (ruidos, cámaras, daños o conflicto vecinal/consorcio), ¿conviene intimar primero por carta documento / intimación extrajudicial o iniciar directamente una denuncia o mediación vecinal?",
+          "¿Qué pruebas válidas debo resguardar desde hoy (videos con fecha, medición de decibeles, acta de constatación, denuncias municipales o reclamos al consorcio) para sostener el reclamo?",
+          "Si el problema persiste pese a la intimación o mediación, ¿corresponde pedir una medida cautelar de cese o reclamo por daños?"
+        ],
+        whatsappMessage: doNotSign
+          ? "Hola Doc, necesito asesorarme por un conflicto concreto de convivencia/propiedad sin expediente iniciado (ruidos, cámaras o daños) y antes de firmar nada quiero evaluar una intimación extrajudicial o carta documento, denuncia o mediación. ¿Qué pruebas debo juntar primero?"
+          : "Hola Doc, le consulto por una situación concreta sin juicio iniciado (conflicto vecinal / ruidos / cámaras / consorcio): ¿me conviene enviar una carta documento o intimación extrajudicial, hacer una denuncia o pedir mediación? Le puedo pasar fotos y detalles."
+      };
+    }
+
+    if (isLaborFactIssue) {
+      return {
+        questions: [
+          "Ante esta situación laboral (despido verbal, negativa de tareas o falta de registración), ¿qué intimación formal por telegrama laboral gratuito o carta documento debo enviar hoy mismo?",
+          "Antes de firmar cualquier recibo, renuncia o acuerdo espontáneo, ¿me ayuda a revisar la liquidación y rubros indemnizatorios que me corresponden?",
+          "¿Corresponde iniciar instancia de conciliación o mediación laboral (SECLO / Ministerio de Trabajo) y qué mensajes, transferencias o testigos debo conservar?"
+        ],
+        whatsappMessage: doNotSign
+          ? "Hola Doc, tuve un problema laboral urgente (situación de hecho sin juicio iniciado) y antes de firmar ningún papel ni acuerdo quiero que me asesore para enviar el telegrama / intimación correcta o ir a conciliación. ¡Muchas gracias!"
+          : "Hola Doc, necesito consultarle por una situación laboral concreta (ej. despido verbal o reclamo al empleador) para evaluar el envío de un telegrama / intimación extrajudicial o citar a mediación. ¿Qué constancias debo ir reuniendo?"
+      };
+    }
+
+    const fueroName = humanizeFuero(fuero || "01_civil_comercial");
+    return {
+      questions: [
+        `Por este hecho concreto (${fueroName}), ¿conviene enviar primero una intimación extrajudicial o carta documento, presentar una denuncia administrativa/policial o citar a mediación?`,
+        "¿Qué pruebas concretas (mensajes, comprobantes, fotos, facturas, audios o testigos) conviene certificar o resguardar antes de formalizar el reclamo?",
+        "¿Existe algún plazo urgente de reclamo, prescripción o precaución antes de responder comunicaciones o firmar recibos de la otra parte?"
+      ],
+      whatsappMessage: doNotSign
+        ? "Hola Doc, necesito asesoramiento por un problema concreto sin expediente judicial abierto y prefiero no firmar nada hasta definir con usted si enviamos una intimación extrajudicial, carta documento, denuncia o pedido de mediación. ¡Muchas gracias!"
+        : "Hola Doc, le escribo para consultarle por una situación de hecho concreta sin expediente iniciado: ¿conviene enviar una carta documento o intimación extrajudicial, radicar denuncia o iniciar mediación, y qué pruebas debería reunir primero?"
+    };
+  }
+
   function buildFormalEmailText(report, fueroReadable) {
+    const hasExpediente = hasJudicialExpedienteReference(null, null, report);
     const questions = (report.questions_for_your_lawyer || []).map(
       (q, idx) => `${idx + 1}. ${cleanTechnicalJargon(q)}`
     );
     const pointsBlock =
       questions.length > 0
         ? questions.join("\n")
-        : "1. Solicito me informe el estado actual del trámite y los próximos pasos previstos.\n2. Solicito copia simple de las últimas presentaciones realizadas.";
+        : hasExpediente
+          ? "1. Solicito me informe el estado actual del trámite y los próximos pasos previstos.\n2. Solicito copia simple de las últimas presentaciones realizadas."
+          : "1. Evaluar si corresponde enviar una carta documento o intimación extrajudicial formal por los hechos ocurridos.\n2. Definir si conviene iniciar una denuncia administrativa/penal o instancia de mediación y qué pruebas reunir.";
 
     const urgencyLine = report.do_not_sign_yet_alert
       ? "Asimismo, le informo que previo a suscribir cualquier acuerdo, recibo o escrito dispositivo, necesito revisar el detalle completo de la liquidación y sus alcances legales.\n\n"
       : "";
 
+    const subjectLine = hasExpediente
+      ? "Asunto: Consulta sobre estado de trámite y puntos pendientes"
+      : "Asunto: Consulta legal por situación de hecho — intimación, denuncia o mediación";
+    const introLine = hasExpediente
+      ? `Me comunico con usted en relación con mi asunto (${fueroReadable}) a fin de solicitarle información actualizada y dejar asentados los siguientes puntos que necesito revisar:`
+      : `Me comunico con usted por una situación concreta (${fueroReadable}) sin expediente judicial previo, para evaluar las vías de acción (intimación extrajudicial, carta documento, denuncia o mediación) y revisar estos puntos:`;
+    const closingLine = hasExpediente
+      ? "Quedo a la espera de su respuesta por esta vía o con copia de las constancias correspondientes."
+      : "Quedo a la espera de su orientación por esta vía para coordinar los próximos pasos y acercarle las pruebas disponibles.";
+
     return [
-      "Asunto: Consulta sobre estado de trámite y puntos pendientes",
+      subjectLine,
       "",
       "Estimado/a Dr./Dra.:",
       "",
-      `Me comunico con usted en relación con mi asunto (${fueroReadable}) a fin de solicitarle información actualizada y dejar asentados los siguientes puntos que necesito revisar:`,
+      introLine,
       "",
       pointsBlock,
       "",
-      urgencyLine +
-        "Quedo a la espera de su respuesta por esta vía o con copia de las constancias correspondientes.",
+      urgencyLine + closingLine,
       "",
       "Atentamente."
     ].join("\n");
@@ -886,19 +999,41 @@
     if (!statusBanner) return;
 
     statusBanner.classList.remove("hidden", "error", "success", "loading");
+    statusBanner.style.display = "";
     if (kind === "loading") {
       statusBanner.classList.add("loading");
-      if (spinner) spinner.classList.remove("hidden");
+      if (spinner) {
+        spinner.classList.remove("hidden");
+        spinner.style.display = "inline-block";
+      }
     } else {
       if (kind === "error") statusBanner.classList.add("error");
       if (kind === "success") statusBanner.classList.add("success");
-      if (spinner) spinner.classList.add("hidden");
+      if (spinner) {
+        spinner.classList.add("hidden");
+        spinner.style.display = "none";
+      }
     }
 
     if (textSpan) {
       textSpan.textContent = message;
     } else {
       statusBanner.textContent = message;
+    }
+  }
+
+  function resetConsultationLoadingUi(intervalId, btnConsult, originalBtnText) {
+    if (intervalId !== null && intervalId !== undefined) {
+      clearInterval(intervalId);
+    }
+    const spinner = document.getElementById("consultation-loading-spinner");
+    if (spinner) {
+      spinner.classList.add("hidden");
+      spinner.style.display = "none";
+    }
+    if (btnConsult) {
+      btnConsult.disabled = false;
+      btnConsult.textContent = originalBtnText;
     }
   }
 
@@ -1003,7 +1138,7 @@
     let elapsedSeconds = 0;
     updateConsultationBanner("loading", LOADING_STATUS_STEPS[0].text);
 
-    const loadingIntervalId = setInterval(() => {
+    let loadingIntervalId = setInterval(() => {
       elapsedSeconds += 15;
       for (let i = LOADING_STATUS_STEPS.length - 1; i >= 0; i -= 1) {
         if (elapsedSeconds >= LOADING_STATUS_STEPS[i].atSeconds) {
@@ -1105,7 +1240,19 @@
             ? plainSummary
             : `${plainSummary} Orientación legal ciudadana verificada conforme a la normativa argentina vigente.`.trim();
 
-        const rawAudioScript = `${repoData.citizen_clear_answer || ""} ${scanData.immediate_action_guide || ""} Recordá siempre solicitar copia íntegra de toda presentación antes de firmar cualquier escrito o acuerdo judicial.`.trim();
+        const hasExpediente = hasJudicialExpedienteReference(queryText, pdfBlob, null);
+        const contextualDeliverables = buildContextualCitizenDeliverables(
+          queryText,
+          resolvedFuero,
+          doNotSign,
+          hasExpediente
+        );
+
+        const rawAudioScript = `${repoData.citizen_clear_answer || ""} ${scanData.immediate_action_guide || ""} ${
+          hasExpediente
+            ? "Recordá siempre solicitar copia íntegra de toda presentación antes de firmar cualquier escrito o acuerdo judicial."
+            : "Recordá resguardar todas las pruebas del hecho y consultar si corresponde enviar carta documento, intimación extrajudicial, denuncia o mediación."
+        }`.trim();
         const paddedAudioScript =
           rawAudioScript.length >= 80
             ? rawAudioScript
@@ -1118,6 +1265,7 @@
           country_code: "AR",
           province_jurisdiction: selectedProvince,
           fuero: resolvedFuero,
+          has_expediente: hasExpediente,
           subscription_tier_applied: "NIVEL_0_GRATUITO_HASTA_15_PAGS",
           do_not_sign_yet_alert: doNotSign,
           do_not_sign_alert_box: doNotSign ? `${scanData.plain_explanation} ${scanData.immediate_action_guide}` : null,
@@ -1132,15 +1280,9 @@
             }
           ],
           audit_and_deadlines_section: `${scanData.immediate_action_guide} (${repoData.temporal_validity_note})`,
-          questions_for_your_lawyer: [
-            "¿Cuál es el estado actual de la causa y qué plazo legal rige para la próxima foja?",
-            "Antes de firmar o consentir un acuerdo, ¿me puede enviar una copia completa por este medio?",
-            "¿La tasa de justicia o gastos solicitados cuentan con constancia o exención por beneficio de litigar sin gastos?"
-          ],
+          questions_for_your_lawyer: contextualDeliverables.questions,
           audio_script_90_seconds: paddedAudioScript,
-          whatsapp_ready_message: doNotSign
-            ? "Hola Doc, antes de firmar o avanzar con lo propuesto, prefiero que me pase una copia completa para leerla con tranquilidad y revisar los puntos del acuerdo. ¡Muchas gracias!"
-            : "Hola Doc, le escribo para consultarle cómo sigue el trámite, qué plazos tenemos por delante y si necesita que le acerque alguna documentación adicional. ¡Muchas gracias!",
+          whatsapp_ready_message: contextualDeliverables.whatsappMessage,
           legal_shield_disclaimer:
             "Orientación ciudadana basada en normativa argentina vigente. No sustituye el patrocinio letrado obligatorio.",
           zero_storage_confirmation:
@@ -1159,30 +1301,16 @@
         "¡Análisis completo! Abajo tenés el dictamen y los botones de acción rápida."
       );
     } catch (err) {
-      clearInterval(loadingIntervalId);
-      const spinner = document.getElementById("consultation-loading-spinner");
-      if (spinner) {
-        spinner.classList.add("hidden");
-      }
-      if (btnConsult) {
-        btnConsult.disabled = false;
-        btnConsult.textContent = originalBtnText;
-      }
+      resetConsultationLoadingUi(loadingIntervalId, btnConsult, originalBtnText);
+      loadingIntervalId = null;
       const isServerError = !err || !err.isUserFacing;
       const errorMsg = isServerError
         ? BUSY_SERVER_MESSAGE
         : `Aviso: ${err.message}`;
       updateConsultationBanner("error", errorMsg);
     } finally {
-      clearInterval(loadingIntervalId);
-      const spinner = document.getElementById("consultation-loading-spinner");
-      if (spinner) {
-        spinner.classList.add("hidden");
-      }
-      if (btnConsult) {
-        btnConsult.disabled = false;
-        btnConsult.textContent = originalBtnText;
-      }
+      resetConsultationLoadingUi(loadingIntervalId, btnConsult, originalBtnText);
+      loadingIntervalId = null;
     }
   }
 
@@ -1208,18 +1336,30 @@
       rawReport && typeof rawReport.citizen_plain_summary === "string" && rawReport.citizen_plain_summary.trim().length >= 40
         ? rawReport.citizen_plain_summary.trim()
         : `${(rawReport && rawReport.citizen_plain_summary) || "Dictamen orientativo emitido por Dr. H Argentina."} Análisis normativo y procesal en lenguaje claro ciudadano.`;
+    const hasExpediente = hasJudicialExpedienteReference(null, null, rawReport);
+    const fallbackDeliverables = buildContextualCitizenDeliverables(
+      rawReport?.citizen_plain_summary || "",
+      rawReport?.fuero || "03_laboral",
+      Boolean(rawReport?.do_not_sign_yet_alert),
+      hasExpediente
+    );
+
     const auditSection =
       rawReport && typeof rawReport.audit_and_deadlines_section === "string" && rawReport.audit_and_deadlines_section.trim().length >= 20
         ? rawReport.audit_and_deadlines_section.trim()
-        : "Plazos procesales y días de nota sujetos al código procesal de la jurisdicción.";
+        : hasExpediente
+          ? "Plazos procesales y días de nota sujetos al código procesal de la jurisdicción."
+          : "Evaluá intimación extrajudicial, carta documento, denuncia o mediación mientras resguardás pruebas del hecho.";
     const audioScript =
       rawReport && typeof rawReport.audio_script_90_seconds === "string" && rawReport.audio_script_90_seconds.trim().length >= 80
         ? rawReport.audio_script_90_seconds.trim()
-        : `${plainSummary} Recordá siempre pedir copia completa antes de firmar cualquier escrito o convenio judicial.`;
+        : hasExpediente
+          ? `${plainSummary} Recordá siempre pedir copia completa antes de firmar cualquier escrito o convenio judicial.`
+          : `${plainSummary} Recordá conservar todas las pruebas concretas y consultar si corresponde carta documento, denuncia o mediación.`;
     const waMsg =
       rawReport && typeof rawReport.whatsapp_ready_message === "string" && rawReport.whatsapp_ready_message.trim().length >= 40
         ? rawReport.whatsapp_ready_message.trim()
-        : "Hola Doc, le escribo para consultarle cómo sigue el trámite, qué plazos tenemos por delante y pedirle copia de la última presentación.";
+        : fallbackDeliverables.whatsappMessage;
     const disclaimer =
       rawReport && typeof rawReport.legal_shield_disclaimer === "string" && rawReport.legal_shield_disclaimer.trim().length >= 40
         ? rawReport.legal_shield_disclaimer.trim()
@@ -1247,10 +1387,7 @@
     const questions =
       rawQuestions.length >= 2
         ? rawQuestions
-        : [
-            "¿Cuál es el estado actual de la causa y qué plazo legal rige para la próxima actuación?",
-            "¿Me puede facilitar copia íntegra de la presentación o acuerdo antes de prestar conformidad?"
-          ];
+        : fallbackDeliverables.questions;
 
     return {
       report_id: reportId,

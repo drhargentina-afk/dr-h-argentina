@@ -248,9 +248,17 @@ class BaseFueroAgent(ABC):
         "¿Qué está pasando? (Explicación en Criollo):\n"
         "(Un resumen en lenguaje 100% claro, coloquial y empático de la situación, SIN citar artículos, números de leyes ni números de juzgados).\n\n"
         "Pasos a seguir:\n"
-        "- (Lista clara de acciones prácticas concretas que el usuario debe tomar).\n\n"
+        "- (Lista clara de acciones prácticas concretas que el usuario debe tomar. "
+        "Si es una consulta ciudadana de hecho sin expediente judicial ni fojas citadas —como ruidos molestos, cámaras del vecino o despido verbal—, "
+        "PROHIBIDO sugerir preguntas o pasos procesales genéricos como '¿Cuál es el estado actual de la causa y qué plazo legal rige para la próxima foja?'; "
+        "redactá planteos y borradores específicos sobre el hecho: intimación extrajudicial, carta documento, denuncia o mediación, y resguardo de pruebas).\n\n"
         "Plazos y Urgencia:\n"
         "(Cuánto tiempo tiene para responder, presentarse o accionar según el caso, si aplica)."
+    )
+
+    _RE_EXPEDIENTE_CONTEXT = re.compile(
+        r"\b(?:expediente|expte\.?|foja|fojas|fs\.?|juzgado|tribunal|c[aá]mara|c[eé]dula|autos\s+caratulados|demanda\s+judicial|sentencia|resoluci[oó]n\s+judicial)\b",
+        re.IGNORECASE,
     )
 
     _RE_STRIP_NUMBERS_IN_CRIOLLO = re.compile(
@@ -270,6 +278,18 @@ class BaseFueroAgent(ABC):
         return cleaned
 
     @classmethod
+    def _has_expediente_context(cls, caratula: str, query_text: str) -> bool:
+        """Determina si existe un expediente judicial adjunto o fojas explícitamente citadas."""
+        normalized_caratula = (caratula or "").strip().lower()
+        if normalized_caratula and normalized_caratula not in {
+            "consulta ciudadana directa",
+            "sin expediente judicial adjunto",
+            "no especificada",
+        }:
+            return True
+        return bool(cls._RE_EXPEDIENTE_CONTEXT.search(query_text or ""))
+
+    @classmethod
     def build_strict_gemini_prompt(
         cls,
         query_text: str,
@@ -281,6 +301,18 @@ class BaseFueroAgent(ABC):
         """Construye el prompt del sistema e instrucciones estrictas de 4 bloques para Gemini."""
         loc_display = city_locality.strip() if city_locality and city_locality.strip() else "No especificada"
         caratula_display = caratula.strip() if caratula and caratula.strip() else "Consulta ciudadana directa"
+        has_expediente = cls._has_expediente_context(caratula, query_text)
+        contextual_instruction = (
+            "Contexto procesal: El usuario adjuntó o citó un expediente judicial; contextualizá las actuaciones y preguntas para su abogado según las fojas."
+            if has_expediente
+            else (
+                "Regla contextual obligatoria (consulta ciudadana de hecho SIN expediente judicial ni fojas): "
+                "Queda PROHIBIDO emitir preguntas procesales genéricas para el abogado como "
+                "'¿Cuál es el estado actual de la causa y qué plazo legal rige para la próxima foja?' o pedir copia de 'la última foja'. "
+                "Toda recomendación en 'Pasos a seguir:', preguntas sugeridas al abogado y borradores de WhatsApp/E-mail debe enfocarse en hechos concretos "
+                "(intimación extrajudicial, carta documento o telegrama, denuncia policial/municipal/administrativa, o mediación, más preservación de pruebas)."
+            )
+        )
         return (
             f"{cls.SYSTEM_PROMPT_GEMINI_ESTRUCTURA_ESTRICTA}\n\n"
             "Contexto verificado para esta consulta:\n"
@@ -289,6 +321,7 @@ class BaseFueroAgent(ABC):
             f"- Área judicial: {fuero_label}\n"
             f"- Carátula / Expediente: {caratula_display}\n"
             f"- Relato o documento del usuario: {query_text}\n\n"
+            f"{contextual_instruction}\n\n"
             "Recordatorio estricto: Sacá todos los números de leyes, artículos y juzgados de los párrafos de explicación. "
             "Usá exclusivamente los 4 encabezados indicados: 'Datos del Caso:', '¿Qué está pasando? (Explicación en Criollo):', "
             "'Pasos a seguir:' y 'Plazos y Urgencia:'."

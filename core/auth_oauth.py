@@ -19,10 +19,41 @@ from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token
 from pydantic import BaseModel, ConfigDict, Field
 
-from core.config import ADMIN_EMAILS, OFFICIAL_ADMIN_EMAIL, ServerSecurityConfig, is_whitelisted_admin_email
+from core.config import ServerSecurityConfig, is_whitelisted_admin_email
 from core.database import DrHDatabase
 
 _logger = logging.getLogger("dr_h.auth_oauth")
+
+# Lista Blanca Estricta de Administradores (acceso bonificado exclusivo)
+ADMIN_EMAILS: list[str] = [
+    "dr.h.argentina@gmail.com",
+    "mendezdamian081@gmail.com",
+    # "slot3@gmail.com",
+    # "slot4@gmail.com",
+    # "slot5@gmail.com",
+    # "slot6@gmail.com",
+    # "slot7@gmail.com",
+    # "slot8@gmail.com",
+    # "slot9@gmail.com",
+    # "slot10@gmail.com",
+    # "slot11@gmail.com",
+    # "slot12@gmail.com",
+]
+
+
+def _is_authorized_admin_email(email: str | None) -> bool:
+    """Normaliza con strip().lower() y verifica pertenencia estricta a ADMIN_EMAILS."""
+    if not email or not isinstance(email, str):
+        return False
+    normalized = email.strip().lower()
+    if not normalized:
+        return False
+    allowed = {
+        addr.strip().lower()
+        for addr in ADMIN_EMAILS
+        if isinstance(addr, str) and addr.strip()
+    }
+    return bool(normalized in allowed and is_whitelisted_admin_email(normalized))
 
 
 class GoogleAuthRequest(BaseModel):
@@ -88,11 +119,12 @@ class GoogleOAuthManager:
         # Soporte para tokens sintéticos de test
         if clean_token.startswith("mock_google_") or clean_token.startswith("test_token_"):
             parts = clean_token.split(":")
-            email = parts[1] if len(parts) > 1 else "usuario_demo@gmail.com"
+            raw_email = parts[1] if len(parts) > 1 else "usuario_demo@gmail.com"
+            clean_email = raw_email.strip().lower()
             name = parts[2] if len(parts) > 2 else "Usuario Demo"
             return {
-                "sub": f"mock-gid-{hash(email)}",
-                "email": email.lower(),
+                "sub": f"mock-gid-{hash(clean_email)}",
+                "email": clean_email,
                 "name": name,
                 "picture": "https://lh3.googleusercontent.com/a/default-user",
             }
@@ -108,10 +140,11 @@ class GoogleOAuthManager:
         # Si no hay client_id configurado (entorno local / desarrollo inicial), decodificar payload JWT
         payload = self._decode_unverified_jwt_payload(clean_token)
         if payload and "email" in payload:
+            clean_payload_email = str(payload["email"]).strip().lower()
             return {
                 "sub": payload.get("sub", f"gid-{secrets.token_hex(6)}"),
-                "email": payload["email"].lower(),
-                "name": payload.get("name", payload["email"].split("@")[0]),
+                "email": clean_payload_email,
+                "name": payload.get("name", clean_payload_email.split("@")[0]),
                 "picture": payload.get("picture", ""),
             }
 
@@ -121,6 +154,8 @@ class GoogleOAuthManager:
         """Autentica o registra al usuario mediante Google OAuth y emite el token de sesión."""
         info = self.verify_google_token(credential)
         email = str(info.get("email", "")).strip().lower()
+        if not email:
+            raise ValueError("El token de Google no contiene un correo electrónico válido.")
         name = str(info.get("name", email.split("@")[0])).strip()
         google_id = str(info.get("sub", ""))
         picture = str(info.get("picture", ""))
@@ -136,15 +171,14 @@ class GoogleOAuthManager:
         now = datetime.now(timezone.utc)
         expires = now + timedelta(hours=self.config.admin_session_ttl_hours * 2)
 
-        is_admin = is_whitelisted_admin_email(email)
+        is_admin = _is_authorized_admin_email(email)
+        has_webhook_payment = self.db.has_approved_webhook_payment(email)
         if is_admin:
             self.db.set_user_paid_pass(email, True)
             user_row = self.db.get_user_by_email(email) or user_row
-        else:
-            has_webhook_payment = self.db.has_approved_webhook_payment(email)
-            if not has_webhook_payment:
-                self.db.set_user_paid_pass(email, False)
-                user_row = self.db.get_user_by_email(email) or user_row
+        elif not has_webhook_payment:
+            self.db.set_user_paid_pass(email, False)
+            user_row = self.db.get_user_by_email(email) or user_row
 
         self.db.create_session(
             token=token,
@@ -154,7 +188,7 @@ class GoogleOAuthManager:
         )
 
         free_used = int(user_row["free_consultations_used"])
-        db_has_paid = bool(int(user_row["has_paid_pass"]) == 1) if not is_admin else True
+        db_has_paid = bool(has_webhook_payment and int(user_row["has_paid_pass"]) == 1)
         has_paid = bool(is_admin or db_has_paid)
         can_free = bool(is_admin or ((free_used == 0) and not has_paid))
 
@@ -195,7 +229,7 @@ class GoogleOAuthManager:
             raise PermissionError("Usuario no encontrado en la base de datos.")
 
         free_used = int(user["free_consultations_used"])
-        is_admin = is_whitelisted_admin_email(email)
+        is_admin = _is_authorized_admin_email(email)
         db_has_paid = int(user["has_paid_pass"]) == 1
         has_paid = bool(is_admin or db_has_paid)
         can_free = bool(is_admin or ((free_used == 0) and not has_paid))

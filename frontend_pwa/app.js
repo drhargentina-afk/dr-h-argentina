@@ -52,6 +52,11 @@
     "07_contencioso_tributario": "Multas, Impuestos y Reclamos al Estado"
   };
 
+  const EXTERNAL_MICRO_PAYMENT_URL =
+    "https://drhargentina.lemonsqueezy.com/checkout/buy/7e6e6656-c5b8-4a49-9717-db29c481f62b";
+  const EXTERNAL_MONTHLY_PAYMENT_URL =
+    "https://drhargentina.lemonsqueezy.com/checkout/buy/b8678882-2d52-43ec-a2f8-5c6ec55e84d0";
+
   const state = {
     currentUser: null,
     accessToken: null,
@@ -63,9 +68,9 @@
     casesList: [],
     isSocialUnlocked: false,
     social_share_unlocked: false,
-    microPaymentUrl: "https://dr-h-argentina.onrender.com/#payment-micro",
-    monthlyPaymentUrl: "https://dr-h-argentina.onrender.com/#payment-monthly",
-    externalPaymentUrl: "https://dr-h-argentina.onrender.com/#payment-monthly",
+    microPaymentUrl: EXTERNAL_MICRO_PAYMENT_URL,
+    monthlyPaymentUrl: EXTERNAL_MONTHLY_PAYMENT_URL,
+    externalPaymentUrl: EXTERNAL_MONTHLY_PAYMENT_URL,
     socialShareText: "Descubrí @DrHArgentina: asistente legal gratuito en lenguaje claro para revisar contratos y causas judiciales sin contraseñas.",
     appUrl: "https://dr-h-argentina.onrender.com"
   };
@@ -141,16 +146,22 @@
   }
 
   function clearAllStoredSessions() {
+    state.accessToken = null;
     state.isSocialUnlocked = false;
     state.social_share_unlocked = false;
     state.currentUser = null;
     state.lastFinalReport = null;
+    state.casesList = [];
+    state.currentPdfBlob = null;
+    state.attachedMediaName = null;
+    state.urgentPhotoMode = false;
     try {
+      localStorage.clear();
       sessionStorage.clear();
-      localStorage.removeItem(TOKEN_STORAGE_KEY);
       purgePassAndAdminStorage();
     } catch (err) {
       console.warn("Error limpiando almacenamiento:", err);
+      purgePassAndAdminStorage();
     }
   }
 
@@ -202,10 +213,7 @@
   }
 
   function handleSessionExpired(message) {
-    storeSessionToken(null);
-    state.currentUser = null;
-    state.lastFinalReport = null;
-    state.isSocialUnlocked = false;
+    clearAllStoredSessions();
     setLoggedInView(null);
     showLoginFeedback(message || "Sesión cerrada.", "error");
   }
@@ -386,22 +394,25 @@
   // =========================================================================
 
   function logout() {
-    const authContainer = document.getElementById('auth-container');
-    const workspace = document.getElementById('app-workspace');
-    
-    if (workspace) workspace.classList.add('hidden');
-    if (authContainer) authContainer.classList.remove('hidden');
+    clearAllStoredSessions();
+    setLoggedInView(null);
+    const authContainer = document.getElementById("auth-container");
+    const workspace = document.getElementById("app-workspace");
+    if (workspace) workspace.classList.add("hidden");
+    if (authContainer) authContainer.classList.remove("hidden");
   }
 
   async function syncBackendGoogleSession(credentialToken) {
     if (!credentialToken || typeof credentialToken !== "string" || !credentialToken.trim()) {
+      clearAllStoredSessions();
       setLoggedInView(null);
       showLoginFeedback("No se recibió una credencial válida de Google.", "error");
       return;
     }
 
-    // Purgar cualquier sesión o flag previo en localStorage/sessionStorage antes de iniciar nueva cuenta
+    // Purgar por completo localStorage y sessionStorage antes de iniciar la nueva cuenta
     clearAllStoredSessions();
+    setLoggedInView(null);
     showLoginFeedback("Validando sesión con Google...", "info");
     try {
       const resp = await fetch("/auth/google", {
@@ -420,7 +431,7 @@
         setLoggedInView(data.user);
       }
     } catch (err) {
-      storeSessionToken(null);
+      clearAllStoredSessions();
       setLoggedInView(null);
       showLoginFeedback(err.message || "Error al iniciar sesión con Google.", "error");
     }
@@ -1337,14 +1348,34 @@
   // 9. MURO DE PAGO SOCIAL Y LINK EXTERNO (MERCHANT OF RECORD)
   // =========================================================================
 
+  function resolveCheckoutUrl(candidateUrl, fallbackUrl) {
+    if (
+      typeof candidateUrl === "string" &&
+      candidateUrl.startsWith("https://") &&
+      !candidateUrl.includes("dr-h-argentina.onrender.com/#payment-")
+    ) {
+      return candidateUrl;
+    }
+    return fallbackUrl;
+  }
+
   async function loadPaymentConfig() {
     try {
       const resp = await fetch("/payments/config");
       if (resp.ok) {
         const cfg = await resp.json();
-        if (cfg.micro_payment_url) state.microPaymentUrl = cfg.micro_payment_url;
-        if (cfg.monthly_payment_url) state.monthlyPaymentUrl = cfg.monthly_payment_url;
-        if (cfg.external_payment_url) state.externalPaymentUrl = cfg.external_payment_url;
+        state.microPaymentUrl = resolveCheckoutUrl(
+          cfg.micro_payment_url,
+          EXTERNAL_MICRO_PAYMENT_URL
+        );
+        state.monthlyPaymentUrl = resolveCheckoutUrl(
+          cfg.monthly_payment_url,
+          EXTERNAL_MONTHLY_PAYMENT_URL
+        );
+        state.externalPaymentUrl = resolveCheckoutUrl(
+          cfg.external_payment_url,
+          EXTERNAL_MONTHLY_PAYMENT_URL
+        );
         if (cfg.social_share_text) state.socialShareText = cfg.social_share_text;
         if (cfg.app_url) state.appUrl = cfg.app_url;
       }
@@ -1498,102 +1529,42 @@
       });
     }
 
-    async function redirectToLemonCheckout(planType, clickedBtn) {
-      const originalText = clickedBtn ? clickedBtn.innerHTML : "";
-      if (clickedBtn) {
-        clickedBtn.disabled = true;
-        clickedBtn.textContent = "Redirigiendo al pago...";
-      }
-      if (statusBox) {
-        statusBox.className = "state-banner";
-        statusBox.classList.remove("hidden");
-        statusBox.textContent = "Redirigiendo al pago...";
-      }
-
-      await loadPaymentConfig();
-
-      const candidateUrl =
+    function redirectToLemonCheckout(planType) {
+      const targetUrl =
         planType === "micro"
-          ? state.microPaymentUrl || state.externalPaymentUrl
-          : state.monthlyPaymentUrl || state.externalPaymentUrl;
-
-      const isRealExternalUrl =
-        candidateUrl &&
-        !candidateUrl.includes("dr-h-argentina.onrender.com/#payment-") &&
-        !candidateUrl.startsWith("#");
-
-      if (isRealExternalUrl) {
-        window.location.href = candidateUrl;
-        return;
-      }
+          ? resolveCheckoutUrl(state.microPaymentUrl, EXTERNAL_MICRO_PAYMENT_URL)
+          : resolveCheckoutUrl(state.monthlyPaymentUrl, EXTERNAL_MONTHLY_PAYMENT_URL);
 
       try {
-        const resp = await apiFetch("/payments/checkout", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ plan_type: planType === "micro" ? "micro" : "monthly" })
-        });
-        if (resp.ok) {
-          const checkoutData = await resp.json();
-          if (
-            checkoutData.mode === "LIVE" &&
-            checkoutData.checkout_url &&
-            !checkoutData.checkout_url.includes("dr-h-argentina.onrender.com/#payment-")
-          ) {
-            window.location.href = checkoutData.checkout_url;
-            return;
-          }
-          // Modo Sandbox / Simulado cuando las URLs reales aún no están cargadas en .env
-          unlockDeliverablesBySocialShare(`checkout_${planType}`);
-          const sandboxMsg =
-            checkoutData.message ||
-            "Pago comercial procesado en modo Sandbox. Tu informe completo y descargables fueron desbloqueados.";
-          if (statusBox) {
-            statusBox.className = "state-banner success";
-            statusBox.classList.remove("hidden");
-            statusBox.textContent = sandboxMsg;
-          }
-          updateConsultationBanner("success", sandboxMsg);
-          return;
-        }
+        window.open(targetUrl, "_blank");
       } catch (err) {
-        console.warn("Checkout fallback notice:", err);
-      }
-
-      // Fallback directo si la petición falló
-      unlockDeliverablesBySocialShare(`checkout_${planType}`);
-      if (statusBox) {
-        statusBox.className = "state-banner success";
-        statusBox.classList.remove("hidden");
-        statusBox.textContent = "Acceso comercial habilitado en modo Sandbox.";
-      }
-
-      setTimeout(() => {
-        if (clickedBtn && originalText) {
-          clickedBtn.disabled = false;
-          clickedBtn.innerHTML = originalText;
+        console.error("Error al abrir el checkout de Lemon Squeezy:", err);
+        if (statusBox) {
+          statusBox.className = "state-banner error";
+          statusBox.classList.remove("hidden");
+          statusBox.textContent = "No pudimos abrir la pestaña de pago. Verificá los permisos del navegador.";
         }
-      }, 2000);
+      }
     }
 
     if (btnPayMicro) {
       btnPayMicro.addEventListener("click", (e) => {
         e.preventDefault();
-        redirectToLemonCheckout("micro", btnPayMicro);
+        redirectToLemonCheckout("micro");
       });
     }
 
     if (btnPayMonthly) {
       btnPayMonthly.addEventListener("click", (e) => {
         e.preventDefault();
-        redirectToLemonCheckout("monthly", btnPayMonthly);
+        redirectToLemonCheckout("monthly");
       });
     }
 
     if (btnPayExternal) {
       btnPayExternal.addEventListener("click", (e) => {
         e.preventDefault();
-        redirectToLemonCheckout("monthly", btnPayExternal);
+        redirectToLemonCheckout("monthly");
       });
     }
   }

@@ -96,6 +96,15 @@ def _resolve_admin_password(raw_password: str) -> SecretStr:
     return SecretStr(secrets.token_urlsafe(24))
 
 
+# URLs oficiales de checkout Lemon Squeezy (Merchant of Record)
+EXTERNAL_MICRO_PAYMENT_URL: str = (
+    "https://drhargentina.lemonsqueezy.com/checkout/buy/7e6e6656-c5b8-4a49-9717-db29c481f62b"
+)
+EXTERNAL_MONTHLY_PAYMENT_URL: str = (
+    "https://drhargentina.lemonsqueezy.com/checkout/buy/b8678882-2d52-43ec-a2f8-5c6ec55e84d0"
+)
+
+
 class ServerSecurityConfig(BaseModel):
     """Configuración inmutable de servidor para Dr. H Argentina (Nodo AR)."""
 
@@ -125,15 +134,15 @@ class ServerSecurityConfig(BaseModel):
         description="Client ID de Google Identity Services OAuth 2.0.",
     )
     external_micro_payment_url: str = Field(
-        default="https://dr-h-argentina.onrender.com/#payment-micro",
+        default=EXTERNAL_MICRO_PAYMENT_URL,
         description="URL externa Lemon Squeezy para Pack Micro-Consultas / Recargas $4.000 ARS (EXTERNAL_MICRO_PAYMENT_URL).",
     )
     external_monthly_payment_url: str = Field(
-        default="https://dr-h-argentina.onrender.com/#payment-monthly",
+        default=EXTERNAL_MONTHLY_PAYMENT_URL,
         description="URL externa Lemon Squeezy para Pase Mensual por Expediente $20.000 ARS (EXTERNAL_MONTHLY_PAYMENT_URL).",
     )
     external_payment_url: str = Field(
-        default="https://dr-h-argentina.onrender.com/#payment-monthly",
+        default=EXTERNAL_MONTHLY_PAYMENT_URL,
         description="URL externa de fallback (EXTERNAL_PAYMENT_URL).",
     )
     database_url: str = Field(default="", description="Ruta de base de datos SQLite o DATABASE_URL PostgreSQL.")
@@ -179,11 +188,11 @@ class ServerSecurityConfig(BaseModel):
         monthly_url = (
             raw_monthly_url
             or raw_legacy_url
-            or "https://dr-h-argentina.onrender.com/#payment-monthly"
+            or EXTERNAL_MONTHLY_PAYMENT_URL
         )
         micro_url = (
             raw_micro_url
-            or "https://dr-h-argentina.onrender.com/#payment-micro"
+            or EXTERNAL_MICRO_PAYMENT_URL
         )
         fallback_url = raw_legacy_url or monthly_url
 

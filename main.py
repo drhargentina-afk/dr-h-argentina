@@ -89,6 +89,12 @@ app.add_middleware(
 
 orchestrator = Agente000Orchestrator()
 db = DrHDatabase(orchestrator.security_config.database_url or None)
+_startup_reset_stats = db.reset_non_admin_users(ADMIN_EMAILS)
+_main_logger.info(
+    "Lista blanca ADMIN_EMAILS aplicada al iniciar (users_reset=%s, sessions_reset=%s).",
+    _startup_reset_stats.get("users_reset", 0),
+    _startup_reset_stats.get("sessions_reset", 0),
+)
 google_auth = GoogleOAuthManager(orchestrator.security_config, db)
 case_tracker = CaseTrackerService(db, orchestrator)
 

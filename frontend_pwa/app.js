@@ -1639,56 +1639,22 @@
     const btnPayExternal = document.getElementById("btn-pay-external");
     const statusBox = document.getElementById("payment-status-feedback");
 
-    async function triggerSocialShare(network) {
-      if (state.paywallLockedStage >= 3) {
-        configureAndShowPaywallStage(3, STAGE_3_PAYWALL_SUBTITLE);
-        return;
+    const MIN_SHARE_RETURN_MS = 12000;
+    const EARLY_RETURN_TOAST =
+      "Parece que volviste antes de completar la publicación. Compartí Dr. H en tu red elegida para destrabar el informe";
+    let activeShareCleanup = null;
+
+    function showShareFeedback(kind, message) {
+      if (statusBox) {
+        statusBox.className = kind === "error" ? "state-banner error" : "state-banner success";
+        statusBox.classList.remove("hidden");
+        statusBox.textContent = message;
       }
+      updateConsultationBanner(kind === "error" ? "error" : "success", message);
+    }
 
-      const shareText = state.socialShareText;
-      const shareUrl = state.appUrl || window.location.origin;
-
-      // 1. Abrir la red social correspondiente en pestaña nueva completa (_blank)
-      if (network === "whatsapp") {
-        window.open(
-          "https://api.whatsapp.com/send?text=" + encodeURIComponent(shareText + " " + shareUrl),
-          "_blank"
-        );
-      } else if (network === "instagram") {
-        const igPromoText = `${shareText} ${shareUrl}`;
-        try {
-          if (navigator.clipboard && navigator.clipboard.writeText) {
-            await navigator.clipboard.writeText(igPromoText);
-          }
-        } catch (e) {
-          // Continuar si el navegador restringe clipboard
-        }
-        const igNotice = "¡Texto copiado! Pegalo en tu Historia o publicación de Instagram";
-        if (statusBox) {
-          statusBox.className = "state-banner success";
-          statusBox.classList.remove("hidden");
-          statusBox.textContent = igNotice;
-        }
-        updateConsultationBanner("success", igNotice);
-        window.open("https://www.instagram.com/", "_blank");
-      } else if (network === "x") {
-        window.open(
-          `https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}&url=${encodeURIComponent(shareUrl)}`,
-          "_blank"
-        );
-      } else if (network === "facebook") {
-        window.open(
-          `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(shareUrl)}&quote=${encodeURIComponent(shareText)}`,
-          "_blank"
-        );
-      } else if (network === "threads") {
-        window.open(
-          `https://www.threads.net/intent/post?text=${encodeURIComponent(shareText + " " + shareUrl)}`,
-          "_blank"
-        );
-      }
-
-      // 2. Validar crédito único diario en backend antes de habilitar la 2ª consulta
+    async function finalizeSocialUnlockForCurrentReport(network) {
+      // 1. Validar crédito único diario en backend antes de habilitar la 2ª consulta
       if (state.accessToken) {
         try {
           const unlockResp = await apiFetch("/payments/social-unlock", {
@@ -1709,12 +1675,7 @@
           if (!unlockResp.ok) {
             const errData = await unlockResp.json().catch(() => ({}));
             const errMsg = errData.detail || "No se pudo validar el desbloqueo por difusión social.";
-            if (statusBox) {
-              statusBox.className = "state-banner error";
-              statusBox.classList.remove("hidden");
-              statusBox.textContent = errMsg;
-            }
-            updateConsultationBanner("error", errMsg);
+            showShareFeedback("error", errMsg);
             return;
           }
 
@@ -1724,44 +1685,125 @@
           }
         } catch (err) {
           console.error("Error validando desbloqueo social en servidor:", err);
-          const netErrMsg = "Error de conexión al validar tu desbloqueo social. Intentá nuevamente.";
-          if (statusBox) {
-            statusBox.className = "state-banner error";
-            statusBox.classList.remove("hidden");
-            statusBox.textContent = netErrMsg;
-          }
-          updateConsultationBanner("error", netErrMsg);
+          showShareFeedback("error", "Error de conexión al validar tu desbloqueo social. Intentá nuevamente.");
           return;
         }
       }
 
-      // 3. Desbloquear exclusivamente la 2ª consulta actual (sin otorgar pase permanente)
+      // 2. Desbloquear exclusivamente la 2ª consulta actual (sin otorgar pase permanente)
       const pending = state.pendingConsultation;
       unlockDeliverablesBySocialShare(network, { syncBackend: false });
 
       if (pending) {
         state.pendingConsultation = null;
-        const retryMsg =
-          "🎉 ¡2ª consulta del día desbloqueada tras difundir en redes! Procesando tu consulta ahora...";
-        if (statusBox) {
-          statusBox.className = "state-banner success";
-          statusBox.classList.remove("hidden");
-          statusBox.textContent = retryMsg;
-        }
+        showShareFeedback(
+          "success",
+          "🎉 ¡2ª consulta del día desbloqueada tras difundir en redes! Procesando tu consulta ahora..."
+        );
         await executeUnifiedConsultation(pending);
         return;
       }
 
-      if (network !== "instagram") {
-        const okMsg =
-          "🎉 ¡2ª consulta del día desbloqueada! Ya podés consultar o descargar este informe (no otorga pase permanente).";
-        if (statusBox) {
-          statusBox.className = "state-banner success";
-          statusBox.classList.remove("hidden");
-          statusBox.textContent = okMsg;
-        }
-        updateConsultationBanner("success", okMsg);
+      showShareFeedback(
+        "success",
+        "🎉 ¡2ª consulta del día desbloqueada! Ya podés consultar o descargar este informe (no otorga pase permanente)."
+      );
+    }
+
+    async function triggerSocialShare(network) {
+      if (state.paywallLockedStage >= 3) {
+        configureAndShowPaywallStage(3, STAGE_3_PAYWALL_SUBTITLE);
+        return;
       }
+
+      if (typeof activeShareCleanup === "function") {
+        activeShareCleanup();
+        activeShareCleanup = null;
+      }
+
+      const shareStartTime = Date.now();
+      const rawShareCopy = state.socialShareText;
+      const shareUrl = state.appUrl || window.location.origin;
+      const shareText = `${rawShareCopy} ${shareUrl}`.trim();
+
+      // 1. Abrir la red social correspondiente en pestaña nueva completa (_blank) sin pop-up chico
+      if (network === "whatsapp") {
+        window.open("https://api.whatsapp.com/send?text=" + encodeURIComponent(shareText), "_blank");
+      } else if (network === "instagram") {
+        try {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(shareText);
+          }
+        } catch (e) {
+          // Continuar si el navegador restringe clipboard
+        }
+        showShareFeedback("success", "¡Texto copiado! Pegalo en tu Historia o publicación");
+        window.open("https://www.instagram.com/", "_blank");
+      } else if (network === "x") {
+        window.open(
+          `https://twitter.com/intent/tweet?text=${encodeURIComponent(rawShareCopy)}&url=${encodeURIComponent(shareUrl)}`,
+          "_blank"
+        );
+      } else if (network === "facebook") {
+        window.open(
+          `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(shareUrl)}&quote=${encodeURIComponent(rawShareCopy)}`,
+          "_blank"
+        );
+      } else if (network === "threads") {
+        window.open(
+          `https://www.threads.net/intent/post?text=${encodeURIComponent(shareText)}`,
+          "_blank"
+        );
+      }
+
+      // 2. Control Anti-Trampa de 12 segundos al regresar a la pestaña
+      let handledReturn = false;
+      const previousOnFocus = window.onfocus;
+
+      function cleanupReturnListeners() {
+        document.removeEventListener("visibilitychange", onVisibilityReturn);
+        if (window.onfocus === onFocusReturn) {
+          window.onfocus = previousOnFocus || null;
+        }
+        if (activeShareCleanup === cleanupReturnListeners) {
+          activeShareCleanup = null;
+        }
+      }
+
+      function evaluateShareReturn() {
+        if (handledReturn) return;
+        handledReturn = true;
+        cleanupReturnListeners();
+
+        const elapsedMs = Date.now() - shareStartTime;
+        if (elapsedMs < MIN_SHARE_RETURN_MS) {
+          showShareFeedback("error", EARLY_RETURN_TOAST);
+          return;
+        }
+
+        void finalizeSocialUnlockForCurrentReport(network);
+      }
+
+      function onVisibilityReturn() {
+        if (document.visibilityState === "visible") {
+          evaluateShareReturn();
+        }
+      }
+
+      function onFocusReturn(ev) {
+        if (typeof previousOnFocus === "function") {
+          try {
+            previousOnFocus.call(window, ev);
+          } catch (err) {
+            console.warn("Error ejecutando onfocus previo:", err);
+          }
+        }
+        evaluateShareReturn();
+      }
+
+      activeShareCleanup = cleanupReturnListeners;
+      document.addEventListener("visibilitychange", onVisibilityReturn);
+      window.onfocus = onFocusReturn;
     }
 
     if (btnShareWa) btnShareWa.addEventListener("click", () => triggerSocialShare("whatsapp"));

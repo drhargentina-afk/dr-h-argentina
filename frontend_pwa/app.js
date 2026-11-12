@@ -68,12 +68,46 @@
     casesList: [],
     isSocialUnlocked: false,
     social_share_unlocked: false,
+    currentReportUnlocked: false,
+    paywallLockedStage: 0,
+    pendingConsultation: null,
     microPaymentUrl: EXTERNAL_MICRO_PAYMENT_URL,
     monthlyPaymentUrl: EXTERNAL_MONTHLY_PAYMENT_URL,
     externalPaymentUrl: EXTERNAL_MONTHLY_PAYMENT_URL,
     socialShareText: "Descubrí @DrHArgentina: asistente legal gratuito en lenguaje claro para revisar contratos y causas judiciales sin contraseñas.",
     appUrl: "https://dr-h-argentina.onrender.com"
   };
+
+  function getDeviceFingerprint() {
+    try {
+      const tz =
+        typeof Intl !== "undefined" && Intl.DateTimeFormat
+          ? Intl.DateTimeFormat().resolvedOptions().timeZone || ""
+          : "";
+      const raw = [
+        navigator.userAgent || "",
+        navigator.language || "",
+        navigator.platform || "",
+        String(navigator.hardwareConcurrency || ""),
+        String(window.screen?.width || 0),
+        String(window.screen?.height || 0),
+        String(window.screen?.colorDepth || 0),
+        tz
+      ].join("|");
+      let h1 = 0x811c9dc5;
+      let h2 = 0x9e3779b9;
+      for (let i = 0; i < raw.length; i += 1) {
+        const ch = raw.charCodeAt(i);
+        h1 = Math.imul(h1 ^ ch, 0x01000193);
+        h2 = Math.imul(h2 ^ (ch + i), 0x85ebca6b);
+      }
+      const hex1 = (h1 >>> 0).toString(16).padStart(8, "0");
+      const hex2 = (h2 >>> 0).toString(16).padStart(8, "0");
+      return `dfp_${hex1}${hex2}`;
+    } catch (err) {
+      return "dfp_fallback_device";
+    }
+  }
 
   function humanizeFuero(code) {
     if (!code) return "General";
@@ -149,6 +183,9 @@
     state.accessToken = null;
     state.isSocialUnlocked = false;
     state.social_share_unlocked = false;
+    state.currentReportUnlocked = false;
+    state.paywallLockedStage = 0;
+    state.pendingConsultation = null;
     state.currentUser = null;
     state.lastFinalReport = null;
     state.casesList = [];
@@ -201,6 +238,7 @@
 
   async function apiFetch(path, options = {}) {
     const headers = new Headers(options.headers || {});
+    headers.set("X-Device-Fingerprint", getDeviceFingerprint());
     if (state.accessToken) {
       headers.set("Authorization", `Bearer ${state.accessToken}`);
     }
@@ -231,17 +269,133 @@
     feedback.classList.remove("hidden");
   }
 
+  const STAGE_2_PAYWALL_SUBTITLE =
+    "Elegí entre desbloquear tu 2ª consulta de hoy compartiendo en redes sociales (Opción 1) o abonar en ARS con Lemon Squeezy (Opción 2).";
+  const STAGE_3_PAYWALL_SUBTITLE =
+    "Alcanzaste el límite de 2 consultas gratuitas por hoy. Habilitá tu pase con Lemon Squeezy (Opción 2) o esperá 24 horas hasta mañana para volver a consultar.";
+
   function isDeliverablesLocked(userProfile) {
     const userData = userProfile || state.currentUser;
-    if (!userData) return !state.social_share_unlocked && !state.isSocialUnlocked;
+    if (!userData) {
+      return (
+        !state.currentReportUnlocked &&
+        !state.social_share_unlocked &&
+        !state.isSocialUnlocked
+      );
+    }
     const userEmail =
       typeof userData.email === "string" ? userData.email.trim().toLowerCase() : "";
     return (
       !ADMIN_EMAILS.includes(userEmail) &&
       !userData.has_paid_pass &&
+      !state.currentReportUnlocked &&
       !state.social_share_unlocked &&
       !state.isSocialUnlocked
     );
+  }
+
+  function setSocialShareSectionVisibility(visible) {
+    const shareIds = [
+      "btn-share-whatsapp",
+      "btn-share-x",
+      "btn-share-facebook",
+      "btn-share-instagram",
+      "btn-share-threads"
+    ];
+    const btnShareWa = document.getElementById("btn-share-whatsapp");
+    const gridEl = btnShareWa ? btnShareWa.parentElement : null;
+    const option1Section = gridEl ? gridEl.parentElement : null;
+
+    if (option1Section && option1Section.id !== "social-paywall-card") {
+      if (visible) {
+        option1Section.classList.remove("hidden");
+        option1Section.style.display = "";
+      } else {
+        option1Section.classList.add("hidden");
+        option1Section.style.display = "none";
+      }
+    }
+    if (gridEl && gridEl.id !== "social-paywall-card") {
+      if (visible) {
+        gridEl.classList.remove("hidden");
+        gridEl.style.display = "";
+      } else {
+        gridEl.classList.add("hidden");
+        gridEl.style.display = "none";
+      }
+    }
+    shareIds.forEach((id) => {
+      const btn = document.getElementById(id);
+      if (btn) {
+        btn.disabled = !visible;
+        if (visible) {
+          btn.classList.remove("hidden");
+          btn.style.display = "";
+        } else {
+          btn.classList.add("hidden");
+          btn.style.display = "none";
+        }
+      }
+    });
+  }
+
+  function configureAndShowPaywallStage(stage, customMessage) {
+    const numericStage = Number(stage) >= 3 ? 3 : 2;
+    state.paywallLockedStage = numericStage;
+
+    const paywallCard = document.getElementById("social-paywall-card");
+    const lockedAlert = document.getElementById("report-locked-alert");
+    const unlockedDetails = document.getElementById("report-unlocked-details");
+    const btnUnlockNow = document.getElementById("btn-unlock-now");
+    const statusBox = document.getElementById("payment-status-feedback");
+    const paywallSubtitle = paywallCard ? paywallCard.querySelector(".panel-header p") : null;
+
+    ensurePaymentButtonsVisible();
+    setSocialShareSectionVisibility(numericStage < 3);
+
+    if (paywallSubtitle) {
+      paywallSubtitle.textContent =
+        numericStage >= 3 ? STAGE_3_PAYWALL_SUBTITLE : STAGE_2_PAYWALL_SUBTITLE;
+    }
+
+    if (unlockedDetails) {
+      unlockedDetails.classList.add("hidden");
+      unlockedDetails.style.display = "none";
+    }
+    if (lockedAlert) {
+      if (numericStage >= 3) {
+        lockedAlert.classList.add("hidden");
+        lockedAlert.style.display = "none";
+      } else if (state.lastFinalReport) {
+        lockedAlert.classList.remove("hidden");
+        lockedAlert.style.display = "flex";
+      }
+    }
+    if (btnUnlockNow) {
+      if (numericStage >= 3) {
+        btnUnlockNow.classList.add("hidden");
+        btnUnlockNow.style.display = "none";
+      } else {
+        btnUnlockNow.classList.remove("hidden");
+        btnUnlockNow.style.display = "";
+      }
+    }
+
+    if (paywallCard) {
+      paywallCard.classList.remove("hidden");
+      paywallCard.style.display = "block";
+      paywallCard.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+
+    if (statusBox) {
+      const fallbackMsg =
+        numericStage >= 3
+          ? STAGE_3_PAYWALL_SUBTITLE
+          : "Esta es tu 2ª consulta del día: compartí en una red social para desbloquear únicamente esta consulta (sin pase permanente) o elegí un pase en Lemon Squeezy.";
+      statusBox.className = numericStage >= 3 ? "state-banner error" : "state-banner";
+      statusBox.textContent = customMessage || fallbackMsg;
+      statusBox.classList.remove("hidden");
+    }
   }
 
   function ensurePaymentButtonsVisible() {
@@ -281,11 +435,7 @@
       } else {
         purgePassAndAdminStorage();
         userProfile.is_admin = false;
-        userProfile.has_paid_pass = Boolean(
-          userProfile.has_paid_pass === true ||
-            state.social_share_unlocked === true ||
-            state.isSocialUnlocked === true
-        );
+        userProfile.has_paid_pass = userProfile.has_paid_pass === true;
       }
 
       if (authContainer) authContainer.classList.add("hidden");
@@ -325,7 +475,8 @@
         }
       }
 
-      if (!state.lastFinalReport) {
+      if (!state.lastFinalReport && !state.paywallLockedStage) {
+        setSocialShareSectionVisibility(true);
         if (paywallCard) {
           paywallCard.classList.add("hidden");
           paywallCard.style.display = "none";
@@ -338,20 +489,12 @@
           reportSection.classList.add("hidden");
           reportSection.style.display = "none";
         }
+      } else if (state.paywallLockedStage >= 2 && isDeliverablesLocked(userProfile)) {
+        configureAndShowPaywallStage(state.paywallLockedStage);
       } else if (isDeliverablesLocked(userProfile)) {
-        if (paywallCard) {
-          paywallCard.classList.remove("hidden");
-          paywallCard.style.display = "block";
-        }
-        if (lockedAlert) {
-          lockedAlert.classList.remove("hidden");
-          lockedAlert.style.display = "flex";
-        }
-        if (unlockedDetails) {
-          unlockedDetails.classList.add("hidden");
-          unlockedDetails.style.display = "none";
-        }
+        configureAndShowPaywallStage(2);
       } else {
+        setSocialShareSectionVisibility(true);
         if (paywallCard) {
           paywallCard.classList.add("hidden");
           paywallCard.style.display = "none";
@@ -691,20 +834,9 @@
     ensurePaymentButtonsVisible();
 
     if (isDeliverablesLocked(state.currentUser) === true) {
-      if (paywallCard) {
-        paywallCard.classList.remove("hidden");
-        paywallCard.style.display = "block";
-      }
-      if (lockedAlert) {
-        lockedAlert.classList.remove("hidden");
-        lockedAlert.style.display = "flex";
-      }
-      if (unlockedDetails) {
-        unlockedDetails.classList.add("hidden");
-        unlockedDetails.style.display = "none";
-      }
-      paywallCard?.scrollIntoView({ behavior: "smooth", block: "start" });
+      configureAndShowPaywallStage(state.paywallLockedStage || 2);
     } else {
+      setSocialShareSectionVisibility(true);
       if (paywallCard) {
         paywallCard.classList.add("hidden");
         paywallCard.style.display = "none";
@@ -770,19 +902,96 @@
     }
   }
 
-  async function executeUnifiedConsultation() {
-    const btnConsult = document.getElementById("btn-run-full-analysis");
-    const verbalText = document.getElementById("input-verbal-statement")?.value.trim() || "";
-    const selectedProvince = document.getElementById("select-province-jurisdiction")?.value || "PJN_NACION_CABA";
-    const cityLocality = document.getElementById("input-city-locality")?.value.trim() || "";
-    const paywallCard = document.getElementById("social-paywall-card");
+  async function handleFunnelPaywallResponse(resp, snapshot) {
+    const stepRaw = resp.headers.get("X-Funnel-Step");
+    const allowSocialRaw = resp.headers.get("X-Allow-Social-Unlock");
+    const parsedStep = stepRaw ? Number.parseInt(stepRaw, 10) : 2;
+    const effectiveStage = allowSocialRaw === "false" || parsedStep >= 3 ? 3 : 2;
 
-    if (!state.currentPdfBlob && verbalText.length < 5 && !state.attachedMediaName) {
+    const errData = await resp.json().catch(() => ({}));
+    const defaultMsg =
+      effectiveStage >= 3
+        ? STAGE_3_PAYWALL_SUBTITLE
+        : "Ya utilizaste tu consulta gratuita de prueba. Compartí en redes sociales para desbloquear tu 2ª consulta del día o habilitá tu pase con Lemon Squeezy.";
+    const detailMsg = errData.detail || defaultMsg;
+
+    state.currentReportUnlocked = false;
+    state.social_share_unlocked = false;
+    state.isSocialUnlocked = false;
+    state.pendingConsultation = effectiveStage === 2 ? snapshot : null;
+
+    configureAndShowPaywallStage(effectiveStage, detailMsg);
+
+    const err402 = new Error(detailMsg);
+    err402.isUserFacing = true;
+    throw err402;
+  }
+
+  function markCurrentReportUnlocked(resp) {
+    const dailyCountRaw = resp && resp.headers ? resp.headers.get("X-Daily-Count") : null;
+    if (dailyCountRaw) {
+      const parsedCount = Number.parseInt(dailyCountRaw, 10);
+      if (!Number.isNaN(parsedCount)) {
+        state.dailyConsultationCount = parsedCount;
+      }
+    }
+    state.currentReportUnlocked = true;
+    state.paywallLockedStage = 0;
+    state.pendingConsultation = null;
+    state.social_share_unlocked = false;
+    state.isSocialUnlocked = false;
+  }
+
+  async function executeUnifiedConsultation(overrideParams) {
+    const retryPayload =
+      overrideParams && overrideParams.isRetryPayload === true ? overrideParams : null;
+    const btnConsult = document.getElementById("btn-run-full-analysis");
+    const pdfBlob = retryPayload ? retryPayload.pdfBlob : state.currentPdfBlob;
+    const pdfName = retryPayload ? retryPayload.pdfName : state.currentPdfName;
+    const verbalText = retryPayload
+      ? retryPayload.verbalText
+      : document.getElementById("input-verbal-statement")?.value.trim() || "";
+    const selectedProvince = retryPayload
+      ? retryPayload.selectedProvince
+      : document.getElementById("select-province-jurisdiction")?.value || "PJN_NACION_CABA";
+    const cityLocality = retryPayload
+      ? retryPayload.cityLocality
+      : document.getElementById("input-city-locality")?.value.trim() || "";
+    const attachedMediaName = retryPayload ? retryPayload.attachedMediaName : state.attachedMediaName;
+    const urgentPhotoMode = retryPayload ? Boolean(retryPayload.urgentPhotoMode) : Boolean(state.urgentPhotoMode);
+
+    if (!pdfBlob && verbalText.length < 5 && !attachedMediaName) {
       updateConsultationBanner(
         "error",
         "Por favor escribí tu duda, pegá lo que te dijo tu abogado o subí un archivo para analizar."
       );
       return;
+    }
+
+    const consultationSnapshot = {
+      isRetryPayload: true,
+      pdfBlob,
+      pdfName,
+      verbalText,
+      selectedProvince,
+      cityLocality,
+      attachedMediaName,
+      urgentPhotoMode
+    };
+
+    state.currentReportUnlocked = false;
+    state.paywallLockedStage = 0;
+    state.social_share_unlocked = false;
+    state.isSocialUnlocked = false;
+    const prevUnlockedEl = document.getElementById("report-unlocked-details");
+    if (prevUnlockedEl) {
+      prevUnlockedEl.classList.add("hidden");
+      prevUnlockedEl.style.display = "none";
+    }
+    const paywallCard = document.getElementById("social-paywall-card");
+    if (paywallCard) {
+      paywallCard.classList.add("hidden");
+      paywallCard.style.display = "none";
     }
 
     const originalBtnText = btnConsult ? btnConsult.textContent : "Consultar a Dr. H";
@@ -805,10 +1014,10 @@
     }, 15000);
 
     try {
-      if (state.currentPdfBlob) {
+      if (pdfBlob) {
         // Enviar expediente a /analyze-expediente con firma SHA-256
         const formData = new FormData();
-        formData.append("file", state.currentPdfBlob, state.currentPdfName);
+        formData.append("file", pdfBlob, pdfName || "expediente.pdf");
         formData.append(
           "user_verbal_statement",
           verbalText || "Solicito análisis de fojas y pasos a seguir."
@@ -829,19 +1038,7 @@
         }
 
         if (resp.status === 402) {
-          ensurePaymentButtonsVisible();
-          if (paywallCard) {
-            paywallCard.classList.remove("hidden");
-            paywallCard.style.display = "block";
-            paywallCard.scrollIntoView({ behavior: "smooth", block: "start" });
-          }
-          const errData = await resp.json().catch(() => ({}));
-          const err402 = new Error(
-            errData.detail ||
-              "Ya utilizaste tu consulta gratuita de prueba. Desbloqueá tu acceso compartiendo en redes o con el pase internacional."
-          );
-          err402.isUserFacing = true;
-          throw err402;
+          await handleFunnelPaywallResponse(resp, consultationSnapshot);
         }
 
         if (!resp.ok) {
@@ -849,56 +1046,51 @@
         }
 
         const report = await resp.json();
+        markCurrentReportUnlocked(resp);
         renderUnifiedResponse(report);
 
         // Actualizar cuota del usuario y recargar historial de causas
         await restoreActiveSession();
       } else {
-        // Consulta rápida o escáner de urgencia
+        // Consulta rápida o escáner de urgencia (secuencial para validar cupo antes de consumir)
         const queryText =
           verbalText ||
-          `Consulta sobre archivo adjunto (${state.attachedMediaName || "documento"}). ¿Puedo firmar o qué precauciones debo tomar?`;
+          `Consulta sobre archivo adjunto (${attachedMediaName || "documento"}). ¿Puedo firmar o qué precauciones debo tomar?`;
 
-        const [scanResp, repoResp] = await Promise.all([
-          apiFetch("/emergency-scan", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              document_text: queryText.length >= 10 ? queryText : `${queryText} — revisión preventiva`,
-              province_jurisdiction: selectedProvince,
-              city_locality: cityLocality,
-              user_context_note: state.urgentPhotoMode ? "Escáner de urgencia cámara" : "Consulta directa"
-            })
-          }),
-          apiFetch("/repository-consult", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              query: queryText,
-              province_jurisdiction: selectedProvince,
-              city_locality: cityLocality
-            })
+        const scanResp = await apiFetch("/emergency-scan", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            document_text: queryText.length >= 10 ? queryText : `${queryText} — revisión preventiva`,
+            province_jurisdiction: selectedProvince,
+            city_locality: cityLocality,
+            user_context_note: urgentPhotoMode ? "Escáner de urgencia cámara" : "Consulta directa"
           })
-        ]);
+        });
 
-        if (scanResp.status === 402 || repoResp.status === 402) {
-          ensurePaymentButtonsVisible();
-          if (paywallCard) {
-            paywallCard.classList.remove("hidden");
-            paywallCard.style.display = "block";
-            paywallCard.scrollIntoView({ behavior: "smooth", block: "start" });
-          }
-          const errSource = repoResp.status === 402 ? repoResp : scanResp;
-          const errData = await errSource.json().catch(() => ({}));
-          const err402 = new Error(
-            errData.detail ||
-              "Ya utilizaste tu consulta gratuita de prueba. Habilitá tu pase para continuar."
-          );
-          err402.isUserFacing = true;
-          throw err402;
+        if (scanResp.status === 402) {
+          await handleFunnelPaywallResponse(scanResp, consultationSnapshot);
         }
 
-        if (!scanResp.ok || !repoResp.ok) {
+        if (!scanResp.ok) {
+          throw new Error(BUSY_SERVER_MESSAGE);
+        }
+
+        const repoResp = await apiFetch("/repository-consult", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            query: queryText,
+            province_jurisdiction: selectedProvince,
+            city_locality: cityLocality
+          })
+        });
+
+        if (repoResp.status === 402) {
+          await handleFunnelPaywallResponse(repoResp, consultationSnapshot);
+        }
+
+        if (!repoResp.ok) {
           throw new Error(BUSY_SERVER_MESSAGE);
         }
 
@@ -906,7 +1098,7 @@
         const repoData = await repoResp.json();
 
         const resolvedFuero = repoData.classified_fuero || scanData.detected_fuero || "03_laboral";
-        const doNotSign = Boolean(scanData.do_not_sign_yet || (state.urgentPhotoMode && scanData.urgency_level !== "VERDE_INFORMATIVO"));
+        const doNotSign = Boolean(scanData.do_not_sign_yet || (urgentPhotoMode && scanData.urgency_level !== "VERDE_INFORMATIVO"));
         const plainSummary = (repoData.citizen_clear_answer || scanData.plain_explanation || "").trim();
         const paddedPlainSummary =
           plainSummary.length >= 40
@@ -933,7 +1125,7 @@
           verified_timeline_cards: [
             {
               foja_ref: 1,
-              document_piece_type: state.urgentPhotoMode ? "Documento Escaneado de Urgencia" : "Consulta Directa en Lenguaje Claro",
+              document_piece_type: urgentPhotoMode ? "Documento Escaneado de Urgencia" : "Consulta Directa en Lenguaje Claro",
               verbatim_excerpt: queryText.length >= 5 ? queryText.slice(0, 280) : "Consulta preventiva ciudadana",
               citizen_plain_translation: paddedPlainSummary.slice(0, 400),
               normative_ref: (repoData.cited_laws && repoData.cited_laws[0]) || "Código Procesal Civil y Comercial / LCT"
@@ -956,6 +1148,7 @@
           drive_saved_file_uri: `https://drive.google.com/dr-h-ar/${reportId}.pdf`
         };
 
+        markCurrentReportUnlocked(repoResp);
         renderUnifiedResponse(synthesizedReport);
         await restoreActiveSession();
       }
@@ -998,19 +1191,12 @@
   // =========================================================================
 
   function promptSocialPaywall(actionLabel) {
-    const paywallCard = document.getElementById("social-paywall-card");
-    const statusBox = document.getElementById("payment-status-feedback");
-    ensurePaymentButtonsVisible();
-    if (paywallCard) {
-      paywallCard.classList.remove("hidden");
-      paywallCard.style.display = "block";
-      paywallCard.scrollIntoView({ behavior: "smooth", block: "start" });
-    }
-    if (statusBox) {
-      statusBox.className = "state-banner";
-      statusBox.textContent = `Para ${actionLabel}, compartí Dr. H en una red social (Opción 1) o accedé con pase internacional (Opción 2).`;
-      statusBox.classList.remove("hidden");
-    }
+    const stage = state.paywallLockedStage >= 3 ? 3 : 2;
+    const msg =
+      stage >= 3
+        ? STAGE_3_PAYWALL_SUBTITLE
+        : `Para ${actionLabel}, compartí Dr. H en una red social (Opción 1) o accedé con Lemon Squeezy (Opción 2).`;
+    configureAndShowPaywallStage(stage, msg);
   }
 
   function normalizeReportPayloadForPdf(rawReport) {
@@ -1107,7 +1293,8 @@
     }
     try {
       const headers = {
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "X-Device-Fingerprint": getDeviceFingerprint()
       };
       if (token) {
         headers["Authorization"] = "Bearer " + token;
@@ -1384,13 +1571,11 @@
     }
   }
 
-  function unlockDeliverablesBySocialShare(network) {
+  function unlockDeliverablesBySocialShare(network, options = {}) {
     state.social_share_unlocked = true;
     state.isSocialUnlocked = true;
-    if (state.currentUser) {
-      state.currentUser.has_paid_pass = true;
-      state.currentUser.can_consult_free = true;
-    }
+    state.currentReportUnlocked = Boolean(state.lastFinalReport);
+    state.paywallLockedStage = 0;
 
     const paywallCard = document.getElementById("social-paywall-card");
     const paywallModal = document.getElementById("paywall-modal");
@@ -1400,7 +1585,6 @@
     const btnDownloadPdf = document.getElementById("btn-download-pdf");
     const btnOpenWa = document.getElementById("btn-open-whatsapp");
     const btnCopyEmail = document.getElementById("btn-copy-email");
-    const userBadge = document.getElementById("user-session-badge");
 
     if (paywallCard) {
       paywallCard.classList.add("hidden");
@@ -1428,13 +1612,9 @@
         btn.disabled = false;
       }
     });
-    if (userBadge && state.currentUser) {
-      const badgeLabel = state.currentUser.name || state.currentUser.email || "Usuario Activo";
-      userBadge.textContent = `👤 ${badgeLabel} (Pase Activo)`;
-    }
 
-    // Notificar al backend en segundo plano si existe sesión activa
-    if (state.accessToken) {
+    // Notificar al backend en segundo plano si se invocó de forma directa
+    if (state.accessToken && options.syncBackend !== false) {
       apiFetch("/payments/social-unlock", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1460,6 +1640,11 @@
     const statusBox = document.getElementById("payment-status-feedback");
 
     async function triggerSocialShare(network) {
+      if (state.paywallLockedStage >= 3) {
+        configureAndShowPaywallStage(3, STAGE_3_PAYWALL_SUBTITLE);
+        return;
+      }
+
       const shareText = state.socialShareText;
       const shareUrl = state.appUrl || window.location.origin;
 
@@ -1503,11 +1688,73 @@
         );
       }
 
-      // 2. Desbloquear inmediatamente el informe completo y ocultar el muro
-      unlockDeliverablesBySocialShare(network);
+      // 2. Validar crédito único diario en backend antes de habilitar la 2ª consulta
+      if (state.accessToken) {
+        try {
+          const unlockResp = await apiFetch("/payments/social-unlock", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ network: network || "whatsapp" })
+          });
+
+          if (unlockResp.status === 402) {
+            const errData = await unlockResp.json().catch(() => ({}));
+            const msg3 = errData.detail || STAGE_3_PAYWALL_SUBTITLE;
+            state.pendingConsultation = null;
+            configureAndShowPaywallStage(3, msg3);
+            updateConsultationBanner("error", msg3);
+            return;
+          }
+
+          if (!unlockResp.ok) {
+            const errData = await unlockResp.json().catch(() => ({}));
+            const errMsg = errData.detail || "No se pudo validar el desbloqueo por difusión social.";
+            if (statusBox) {
+              statusBox.className = "state-banner error";
+              statusBox.classList.remove("hidden");
+              statusBox.textContent = errMsg;
+            }
+            updateConsultationBanner("error", errMsg);
+            return;
+          }
+
+          const unlockData = await unlockResp.json().catch(() => ({}));
+          if (state.currentUser && typeof unlockData.has_paid_pass === "boolean") {
+            state.currentUser.has_paid_pass = unlockData.has_paid_pass;
+          }
+        } catch (err) {
+          console.error("Error validando desbloqueo social en servidor:", err);
+          const netErrMsg = "Error de conexión al validar tu desbloqueo social. Intentá nuevamente.";
+          if (statusBox) {
+            statusBox.className = "state-banner error";
+            statusBox.classList.remove("hidden");
+            statusBox.textContent = netErrMsg;
+          }
+          updateConsultationBanner("error", netErrMsg);
+          return;
+        }
+      }
+
+      // 3. Desbloquear exclusivamente la 2ª consulta actual (sin otorgar pase permanente)
+      const pending = state.pendingConsultation;
+      unlockDeliverablesBySocialShare(network, { syncBackend: false });
+
+      if (pending) {
+        state.pendingConsultation = null;
+        const retryMsg =
+          "🎉 ¡2ª consulta del día desbloqueada tras difundir en redes! Procesando tu consulta ahora...";
+        if (statusBox) {
+          statusBox.className = "state-banner success";
+          statusBox.classList.remove("hidden");
+          statusBox.textContent = retryMsg;
+        }
+        await executeUnifiedConsultation(pending);
+        return;
+      }
 
       if (network !== "instagram") {
-        const okMsg = "🎉 ¡Acceso Desbloqueado! Gracias por difundir Dr. H en redes. Ya podés leer tu dictamen completo y descargar tu informe.";
+        const okMsg =
+          "🎉 ¡2ª consulta del día desbloqueada! Ya podés consultar o descargar este informe (no otorga pase permanente).";
         if (statusBox) {
           statusBox.className = "state-banner success";
           statusBox.classList.remove("hidden");

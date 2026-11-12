@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import base64
 import binascii
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 import hashlib
 import json
@@ -85,6 +87,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
+    expose_headers=["X-Daily-Count", "X-Funnel-Step", "X-Allow-Social-Unlock"],
 )
 
 orchestrator = Agente000Orchestrator()
@@ -96,6 +99,477 @@ _main_logger.info(
     _startup_reset_stats.get("sessions_reset", 0),
 )
 google_auth = GoogleOAuthManager(orchestrator.security_config, db)
+
+_AR_TIMEZONE = timezone(timedelta(hours=-3))
+_DAILY_FUNNEL_STEP_2_DETAIL = (
+    "Ya utilizaste tu consulta gratuita de prueba. "
+    "Compartí en redes sociales para desbloquear tu 2ª consulta del día o habilitá tu pase con Lemon Squeezy."
+)
+_DAILY_FUNNEL_STEP_3_DETAIL = (
+    "Alcanzaste el límite de 2 consultas gratuitas por hoy. "
+    "Habilitá tu acceso con Lemon Squeezy o esperá 24 horas hasta mañana para volver a consultar."
+)
+
+
+@dataclass(frozen=True)
+class DailyFunnelStatus:
+    """Estado consolidado del embudo diario (Cuenta + IP + X-Device-Fingerprint)."""
+
+    day_key: str
+    used_today: int
+    acct_social_credits: int
+    social_unlock_used: int
+    is_privileged: bool
+    funnel_step: int
+    allow_social_unlock: bool
+    next_count: int
+
+
+class DailyStatusResponse(BaseModel):
+    """Respuesta del estado diario del embudo progresivo para el usuario autenticado."""
+
+    day_key: str
+    used_today: int
+    acct_social_credits: int
+    social_unlock_used: int
+    is_privileged: bool
+    funnel_step: int
+    allow_social_unlock: bool
+
+
+def _ensure_daily_funnel_schema() -> None:
+    """Crea la tabla e índices del embudo diario en SQLite si aún no existen."""
+    try:
+        with db._connect() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS daily_funnel_counters (
+                    scope_key TEXT NOT NULL,
+                    day_key TEXT NOT NULL,
+                    consultations_count INTEGER NOT NULL DEFAULT 0,
+                    social_credits INTEGER NOT NULL DEFAULT 0,
+                    social_unlock_used INTEGER NOT NULL DEFAULT 0,
+                    updated_at_iso TEXT NOT NULL,
+                    PRIMARY KEY (scope_key, day_key)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_daily_funnel_day_key
+                ON daily_funnel_counters (day_key)
+                """
+            )
+    except Exception as exc:
+        _main_logger.error("Error inicializando tabla daily_funnel_counters: %s", exc)
+        raise
+
+
+_ensure_daily_funnel_schema()
+
+
+def _current_ar_day_key() -> str:
+    """Retorna la fecha calendario actual de Argentina (UTC-3) en formato YYYY-MM-DD."""
+    return datetime.now(_AR_TIMEZONE).strftime("%Y-%m-%d")
+
+
+def _extract_client_ip(request: Request) -> str:
+    """Extrae la IP real del cliente ignorando 'testclient' salvo proxy explícito."""
+    forwarded = str(request.headers.get("x-forwarded-for", "") or "").strip()
+    if forwarded:
+        first_ip = forwarded.split(",")[0].strip()
+        if first_ip:
+            return first_ip[:64]
+    real_ip = str(request.headers.get("x-real-ip", "") or "").strip()
+    if real_ip:
+        return real_ip[:64]
+    client_host = str(request.client.host if request.client else "").strip()
+    if client_host.lower() == "testclient":
+        return ""
+    return client_host[:64]
+
+
+def _extract_device_fingerprint(request: Request) -> str:
+    """Extrae el encabezado X-Device-Fingerprint normalizado."""
+    return str(request.headers.get("x-device-fingerprint", "") or "").strip()[:128]
+
+
+def _funnel_scope_keys(email: str, client_ip: str, device_fp: str) -> tuple[str, list[str]]:
+    """Construye la clave primaria de cuenta y las claves compuestas (Cuenta + IP + Huella)."""
+    acct_key = f"acct:{str(email or '').strip().lower()}"
+    keys: list[str] = [acct_key]
+    if client_ip:
+        keys.append(f"ip:{client_ip}")
+    if device_fp:
+        keys.append(f"fp:{device_fp}")
+    return acct_key, keys
+
+
+def _is_privileged_user(user: UserProfileResponse) -> bool:
+    """Determina si el usuario evita el embudo diario por ser admin whitelist o tener pase pago."""
+    normalized_user_email = str(user.email or "").strip().lower()
+    is_admin_whitelisted = bool(
+        is_whitelisted_admin_email(normalized_user_email)
+        or (user.is_admin and normalized_user_email == orchestrator.security_config.admin_user.strip().lower())
+    )
+    return bool(is_admin_whitelisted or user.has_paid_pass)
+
+
+def _compute_funnel_status_from_rows(
+    *,
+    day_key: str,
+    acct_key: str,
+    rows: list[Any],
+    is_privileged: bool,
+) -> DailyFunnelStatus:
+    """Calcula el paso del embudo (1, 2 o 3) a partir de filas consultadas para Cuenta/IP/Huella."""
+    used_today = max((int(row["consultations_count"] or 0) for row in rows), default=0)
+    social_unlock_used = max((int(row["social_unlock_used"] or 0) for row in rows), default=0)
+    acct_social_credits = max(
+        (int(row["social_credits"] or 0) for row in rows if str(row["scope_key"]) == acct_key),
+        default=0,
+    )
+
+    if is_privileged:
+        funnel_step = 1
+        allow_social_unlock = False
+        next_count = used_today + 1
+    elif used_today <= 0:
+        funnel_step = 1
+        allow_social_unlock = False
+        next_count = 1
+    elif used_today == 1:
+        if acct_social_credits >= 1:
+            funnel_step = 2
+            allow_social_unlock = False
+            next_count = 2
+        elif social_unlock_used >= 1:
+            funnel_step = 3
+            allow_social_unlock = False
+            next_count = 2
+        else:
+            funnel_step = 2
+            allow_social_unlock = True
+            next_count = 2
+    else:
+        funnel_step = 3
+        allow_social_unlock = False
+        next_count = used_today + 1
+
+    return DailyFunnelStatus(
+        day_key=day_key,
+        used_today=used_today,
+        acct_social_credits=acct_social_credits,
+        social_unlock_used=social_unlock_used,
+        is_privileged=is_privileged,
+        funnel_step=funnel_step,
+        allow_social_unlock=allow_social_unlock,
+        next_count=next_count,
+    )
+
+
+def _read_daily_funnel_status_with_conn(
+    conn: Any,
+    user: UserProfileResponse,
+    request: Request,
+) -> tuple[DailyFunnelStatus, str, list[str]]:
+    """Lee las filas vigentes del día UTC-3 para Cuenta + IP + Huella dentro de una transacción."""
+    day_key = _current_ar_day_key()
+    client_ip = _extract_client_ip(request)
+    device_fp = _extract_device_fingerprint(request)
+    acct_key, scope_keys = _funnel_scope_keys(user.email, client_ip, device_fp)
+    placeholders = ",".join("?" for _ in scope_keys)
+    rows = conn.execute(
+        f"""
+        SELECT scope_key, consultations_count, social_credits, social_unlock_used
+        FROM daily_funnel_counters
+        WHERE day_key = ? AND scope_key IN ({placeholders})
+        """,
+        [day_key, *scope_keys],
+    ).fetchall()
+    status_obj = _compute_funnel_status_from_rows(
+        day_key=day_key,
+        acct_key=acct_key,
+        rows=rows,
+        is_privileged=_is_privileged_user(user),
+    )
+    return status_obj, acct_key, scope_keys
+
+
+def _apply_funnel_headers(
+    response: Response,
+    *,
+    daily_count: int,
+    funnel_step: int,
+    allow_social_unlock: bool,
+) -> None:
+    """Inyecta encabezados X-Daily-Count, X-Funnel-Step y X-Allow-Social-Unlock en la respuesta."""
+    response.headers["X-Daily-Count"] = str(max(0, daily_count))
+    response.headers["X-Funnel-Step"] = str(funnel_step)
+    response.headers["X-Allow-Social-Unlock"] = "true" if allow_social_unlock else "false"
+
+
+def _upsert_funnel_row(
+    conn: Any,
+    *,
+    scope_key: str,
+    day_key: str,
+    consultations_count: int,
+    social_credits: int,
+    social_unlock_used: int,
+    now_iso: str,
+) -> None:
+    """Inserta o actualiza un contador diario para una clave de alcance."""
+    conn.execute(
+        """
+        INSERT INTO daily_funnel_counters (
+            scope_key, day_key, consultations_count, social_credits, social_unlock_used, updated_at_iso
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(scope_key, day_key) DO UPDATE SET
+            consultations_count = excluded.consultations_count,
+            social_credits = excluded.social_credits,
+            social_unlock_used = excluded.social_unlock_used,
+            updated_at_iso = excluded.updated_at_iso
+        """,
+        (scope_key, day_key, consultations_count, social_credits, social_unlock_used, now_iso),
+    )
+
+
+def _enforce_daily_funnel_gate(
+    user: UserProfileResponse,
+    request: Request,
+    response: Response,
+) -> DailyFunnelStatus:
+    """Valida el embudo diario (1ª gratis, 2ª requiere crédito social/pago, 3ª+ solo pago o 24h)."""
+    try:
+        with db._connect() as conn:
+            status_obj, _, _ = _read_daily_funnel_status_with_conn(conn, user, request)
+    except Exception as exc:
+        _main_logger.error("Error leyendo estado del embudo diario: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error verificando el cupo diario de consultas.",
+        ) from exc
+
+    if status_obj.is_privileged:
+        _apply_funnel_headers(
+            response,
+            daily_count=status_obj.used_today,
+            funnel_step=1,
+            allow_social_unlock=False,
+        )
+        return status_obj
+
+    if status_obj.used_today == 0 or (status_obj.used_today == 1 and status_obj.acct_social_credits >= 1):
+        _apply_funnel_headers(
+            response,
+            daily_count=status_obj.next_count,
+            funnel_step=status_obj.funnel_step,
+            allow_social_unlock=False,
+        )
+        return status_obj
+
+    if status_obj.funnel_step == 2 and status_obj.allow_social_unlock:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail=_DAILY_FUNNEL_STEP_2_DETAIL,
+            headers={
+                "X-Daily-Count": str(status_obj.used_today),
+                "X-Funnel-Step": "2",
+                "X-Allow-Social-Unlock": "true",
+            },
+        )
+
+    raise HTTPException(
+        status_code=status.HTTP_402_PAYMENT_REQUIRED,
+        detail=_DAILY_FUNNEL_STEP_3_DETAIL,
+        headers={
+            "X-Daily-Count": str(status_obj.used_today),
+            "X-Funnel-Step": "3",
+            "X-Allow-Social-Unlock": "false",
+        },
+    )
+
+
+def _consume_daily_funnel_slot(
+    user: UserProfileResponse,
+    request: Request,
+    response: Response,
+) -> DailyFunnelStatus:
+    """Registra una consulta exitosa en el embudo diario y consume crédito social si aplicaba."""
+    now_iso = datetime.now(_AR_TIMEZONE).isoformat()
+    try:
+        with db._connect() as conn:
+            status_obj, acct_key, scope_keys = _read_daily_funnel_status_with_conn(conn, user, request)
+            if status_obj.is_privileged:
+                _apply_funnel_headers(
+                    response,
+                    daily_count=status_obj.used_today,
+                    funnel_step=1,
+                    allow_social_unlock=False,
+                )
+                return status_obj
+
+            new_count = max(1, status_obj.used_today + 1)
+            consumed_credit = 1 if (status_obj.used_today == 1 and status_obj.acct_social_credits >= 1) else 0
+            placeholders = ",".join("?" for _ in scope_keys)
+            existing_rows = conn.execute(
+                f"""
+                SELECT scope_key, consultations_count, social_credits, social_unlock_used
+                FROM daily_funnel_counters
+                WHERE day_key = ? AND scope_key IN ({placeholders})
+                """,
+                [status_obj.day_key, *scope_keys],
+            ).fetchall()
+            existing_by_key = {str(r["scope_key"]): r for r in existing_rows}
+
+            for key in scope_keys:
+                prev = existing_by_key.get(key)
+                prev_count = int(prev["consultations_count"] or 0) if prev else 0
+                prev_credits = int(prev["social_credits"] or 0) if prev else 0
+                prev_social_used = int(prev["social_unlock_used"] or 0) if prev else 0
+                next_credits = max(0, prev_credits - consumed_credit) if key == acct_key else prev_credits
+                _upsert_funnel_row(
+                    conn,
+                    scope_key=key,
+                    day_key=status_obj.day_key,
+                    consultations_count=max(prev_count, new_count),
+                    social_credits=next_credits,
+                    social_unlock_used=max(prev_social_used, consumed_credit),
+                    now_iso=now_iso,
+                )
+
+        db.increment_free_consultations(user.email)
+        resulting_step = 1 if new_count == 1 else (2 if new_count == 2 else 3)
+        _apply_funnel_headers(
+            response,
+            daily_count=new_count,
+            funnel_step=resulting_step,
+            allow_social_unlock=False,
+        )
+        return DailyFunnelStatus(
+            day_key=status_obj.day_key,
+            used_today=new_count,
+            acct_social_credits=max(0, status_obj.acct_social_credits - consumed_credit),
+            social_unlock_used=max(status_obj.social_unlock_used, consumed_credit),
+            is_privileged=False,
+            funnel_step=resulting_step,
+            allow_social_unlock=False,
+            next_count=new_count + 1,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _main_logger.error("Error consumiendo cupo del embudo diario: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error actualizando el contador de consultas diarias.",
+        ) from exc
+
+
+def _grant_social_unlock_credit(
+    user: UserProfileResponse,
+    request: Request,
+    response: Response,
+) -> DailyFunnelStatus:
+    """Otorga 1 crédito único diario para la 2ª consulta tras compartir en redes (sin pase permanente)."""
+    now_iso = datetime.now(_AR_TIMEZONE).isoformat()
+    try:
+        with db._connect() as conn:
+            status_obj, acct_key, scope_keys = _read_daily_funnel_status_with_conn(conn, user, request)
+            if status_obj.is_privileged:
+                _apply_funnel_headers(
+                    response,
+                    daily_count=status_obj.used_today,
+                    funnel_step=1,
+                    allow_social_unlock=False,
+                )
+                return status_obj
+
+            if status_obj.used_today >= 2:
+                raise HTTPException(
+                    status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                    detail=_DAILY_FUNNEL_STEP_3_DETAIL,
+                    headers={
+                        "X-Daily-Count": str(status_obj.used_today),
+                        "X-Funnel-Step": "3",
+                        "X-Allow-Social-Unlock": "false",
+                    },
+                )
+
+            if status_obj.acct_social_credits >= 1:
+                _apply_funnel_headers(
+                    response,
+                    daily_count=status_obj.used_today,
+                    funnel_step=2,
+                    allow_social_unlock=False,
+                )
+                return status_obj
+
+            if status_obj.social_unlock_used >= 1:
+                raise HTTPException(
+                    status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                    detail=_DAILY_FUNNEL_STEP_3_DETAIL,
+                    headers={
+                        "X-Daily-Count": str(status_obj.used_today),
+                        "X-Funnel-Step": "3",
+                        "X-Allow-Social-Unlock": "false",
+                    },
+                )
+
+            placeholders = ",".join("?" for _ in scope_keys)
+            existing_rows = conn.execute(
+                f"""
+                SELECT scope_key, consultations_count, social_credits, social_unlock_used
+                FROM daily_funnel_counters
+                WHERE day_key = ? AND scope_key IN ({placeholders})
+                """,
+                [status_obj.day_key, *scope_keys],
+            ).fetchall()
+            existing_by_key = {str(r["scope_key"]): r for r in existing_rows}
+
+            for key in scope_keys:
+                prev = existing_by_key.get(key)
+                prev_count = int(prev["consultations_count"] or 0) if prev else 0
+                prev_credits = int(prev["social_credits"] or 0) if prev else 0
+                next_credits = max(prev_credits, 1) if key == acct_key else prev_credits
+                _upsert_funnel_row(
+                    conn,
+                    scope_key=key,
+                    day_key=status_obj.day_key,
+                    consultations_count=prev_count,
+                    social_credits=next_credits,
+                    social_unlock_used=1,
+                    now_iso=now_iso,
+                )
+
+            _apply_funnel_headers(
+                response,
+                daily_count=status_obj.used_today,
+                funnel_step=2,
+                allow_social_unlock=False,
+            )
+            return DailyFunnelStatus(
+                day_key=status_obj.day_key,
+                used_today=status_obj.used_today,
+                acct_social_credits=1,
+                social_unlock_used=1,
+                is_privileged=False,
+                funnel_step=2,
+                allow_social_unlock=False,
+                next_count=max(2, status_obj.used_today + 1),
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _main_logger.error("Error otorgando desbloqueo social diario: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error registrando el desbloqueo por difusión en redes sociales.",
+        ) from exc
+
+
 case_tracker = CaseTrackerService(db, orchestrator)
 
 admin_sessions = AdminSessionManager(
@@ -308,6 +782,8 @@ async def private_redoc(request: Request) -> HTMLResponse:
 async def analyze_expediente_endpoint(
     file: Annotated[UploadFile, File(description="Archivo PDF del expediente judicial.")],
     user: Annotated[UserProfileResponse, Depends(get_current_user)],
+    request: Request,
+    response: Response,
     user_verbal_statement: Annotated[
         str,
         Form(description="Relato del ciudadano o duda principal."),
@@ -346,18 +822,9 @@ async def analyze_expediente_endpoint(
             detail="Este documento ya fue procesado bajo una prueba gratuita",
         )
 
-    # 2. Regla de Gratuidad: 1 sola consulta gratis por cuenta de Google
-    normalized_user_email = str(user.email or "").strip().lower()
-    is_admin_whitelisted = bool(
-        is_whitelisted_admin_email(normalized_user_email)
-        or (user.is_admin and normalized_user_email == orchestrator.security_config.admin_user.strip().lower())
-    )
-    is_free_user = not is_admin_whitelisted and not user.has_paid_pass
-    if is_free_user and user.free_consultations_used >= 1:
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail="Ya utilizaste tu consulta gratuita de prueba. Habilitá tu pase para continuar.",
-        )
+    # 2. Embudo Progresivo de Consultas Diarias (Cuenta + IP + X-Device-Fingerprint)
+    funnel_status = _enforce_daily_funnel_gate(user, request, response)
+    is_free_user = not funnel_status.is_privileged
 
     fee_dec = _parse_optional_decimal(claimed_lawyer_fee_pct, "claimed_lawyer_fee_pct")
     upfront_dec = _parse_optional_decimal(upfront_cost_requested_ars, "upfront_cost_requested_ars")
@@ -381,9 +848,8 @@ async def analyze_expediente_endpoint(
             is_free_tier=is_free_user,
         )
 
-        # 4. Consumir consulta gratuita si correspondía
-        if is_free_user:
-            db.increment_free_consultations(user.email)
+        # 4. Consumir cupo en el embudo diario (y actualizar contador en base de datos)
+        _consume_daily_funnel_slot(user, request, response)
 
         # 5. Guardar automáticamente en el Dashboard de causas del usuario
         case_tracker.record_case_from_final_report(
@@ -392,6 +858,8 @@ async def analyze_expediente_endpoint(
         )
 
         return report
+    except HTTPException:
+        raise
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except Exception as exc:
@@ -435,20 +903,12 @@ async def pre_quote_endpoint(
 )
 async def emergency_scan_endpoint(
     request: EmergencyScanRequest,
+    http_request: Request,
+    response: Response,
     _user: Annotated[UserProfileResponse, Depends(get_current_user)],
 ) -> EmergencyScanResponse:
     """Escáner '¡No Firmes Todavía!' para cláusulas de renuncia o resoluciones urgentes."""
-    normalized_user_email = str(_user.email or "").strip().lower()
-    is_admin_whitelisted = bool(
-        is_whitelisted_admin_email(normalized_user_email)
-        or (_user.is_admin and normalized_user_email == orchestrator.security_config.admin_user.strip().lower())
-    )
-    is_free_user = not is_admin_whitelisted and not _user.has_paid_pass
-    if is_free_user and _user.free_consultations_used >= 1:
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail="Ya utilizaste tu consulta gratuita de prueba. Habilitá tu pase para continuar.",
-        )
+    _enforce_daily_funnel_gate(_user, http_request, response)
 
     try:
         return orchestrator.run_emergency_scan(request)
@@ -494,20 +954,12 @@ def _generate_dynamic_llm_legal_answer(
 )
 async def repository_consult_endpoint(
     request: RepositoryConsultRequest,
+    http_request: Request,
+    response: Response,
     _user: Annotated[UserProfileResponse, Depends(get_current_user)],
 ) -> RepositoryConsultResponse:
     """Consulta normativa y generación de respuesta dinámica con IA en lenguaje claro."""
-    normalized_user_email = str(_user.email or "").strip().lower()
-    is_admin_whitelisted = bool(
-        is_whitelisted_admin_email(normalized_user_email)
-        or (_user.is_admin and normalized_user_email == orchestrator.security_config.admin_user.strip().lower())
-    )
-    is_free_user = not is_admin_whitelisted and not _user.has_paid_pass
-    if is_free_user and _user.free_consultations_used >= 1:
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail="Ya utilizaste tu consulta gratuita de prueba. Habilitá tu pase para continuar.",
-        )
+    _enforce_daily_funnel_gate(_user, http_request, response)
 
     try:
         base_resp = orchestrator.consult_normative_repository(request)
@@ -519,8 +971,7 @@ async def repository_consult_endpoint(
             fallback_answer=base_resp.citizen_clear_answer,
             city_locality=request.city_locality,
         )
-        if is_free_user:
-            db.increment_free_consultations(_user.email)
+        _consume_daily_funnel_slot(_user, http_request, response)
         return RepositoryConsultResponse(
             classified_fuero=base_resp.classified_fuero,
             province_jurisdiction=base_resp.province_jurisdiction,
@@ -529,6 +980,8 @@ async def repository_consult_endpoint(
             citizen_clear_answer=dynamic_answer,
             temporal_validity_note=base_resp.temporal_validity_note,
         )
+    except HTTPException:
+        raise
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except Exception as exc:
@@ -831,16 +1284,51 @@ async def payments_config_endpoint() -> PaymentConfigResponse:
 @app.post("/payments/social-unlock", response_model=SocialUnlockResponse, tags=["Monetización Dual"])
 async def payments_social_unlock_endpoint(
     req: SocialUnlockRequest,
+    request: Request,
+    response: Response,
     user: Annotated[UserProfileResponse, Depends(get_current_user)],
 ) -> SocialUnlockResponse:
-    """Desbloquea el acceso completo (descarga de dictamen, entregables y causas) tras compartir en redes."""
-    db.set_user_paid_pass(user.email, True)
-    _main_logger.info("Pase desbloqueado por pago social para %s (red: %s)", user.email, req.network)
+    """Desbloquea exclusivamente la 2ª consulta del día tras compartir en redes (sin pase permanente)."""
+    _grant_social_unlock_credit(user, request, response)
+    _main_logger.info(
+        "Crédito único diario (2ª consulta) otorgado por difusión social para %s (red: %s)",
+        user.email,
+        req.network,
+    )
     return SocialUnlockResponse(
         status="UNLOCKED",
-        message=f"¡Pase desbloqueado con éxito tras difundir en {req.network.capitalize()}! Ya podés descargar tu informe.",
+        message=(
+            f"¡2ª consulta del día desbloqueada tras difundir en {req.network.capitalize()}! "
+            "Este beneficio aplica solo a tu 2ª consulta de hoy y no otorga pase permanente."
+        ),
         user_email=user.email,
-        has_paid_pass=True,
+        has_paid_pass=bool(user.has_paid_pass),
+    )
+
+
+@app.get("/payments/daily-status", response_model=DailyStatusResponse, tags=["Monetización Dual"])
+async def payments_daily_status_endpoint(
+    request: Request,
+    response: Response,
+    user: Annotated[UserProfileResponse, Depends(get_current_user)],
+) -> DailyStatusResponse:
+    """Devuelve el estado actual del embudo progresivo diario (Cuenta + IP + Huella)."""
+    with db._connect() as conn:
+        status_obj, _, _ = _read_daily_funnel_status_with_conn(conn, user, request)
+    _apply_funnel_headers(
+        response,
+        daily_count=status_obj.used_today,
+        funnel_step=status_obj.funnel_step,
+        allow_social_unlock=status_obj.allow_social_unlock,
+    )
+    return DailyStatusResponse(
+        day_key=status_obj.day_key,
+        used_today=status_obj.used_today,
+        acct_social_credits=status_obj.acct_social_credits,
+        social_unlock_used=status_obj.social_unlock_used,
+        is_privileged=status_obj.is_privileged,
+        funnel_step=status_obj.funnel_step,
+        allow_social_unlock=status_obj.allow_social_unlock,
     )
 
 

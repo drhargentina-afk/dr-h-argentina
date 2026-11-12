@@ -88,7 +88,16 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
-    expose_headers=["X-Daily-Count", "X-Funnel-Step", "X-Allow-Social-Unlock"],
+    expose_headers=[
+        "X-Daily-Count",
+        "X-Funnel-Step",
+        "X-Allow-Social-Unlock",
+        "Retry-After",
+        "X-RateLimit-Limit-Hour",
+        "X-RateLimit-Limit-Day",
+        "X-RateLimit-Remaining-Hour",
+        "X-RateLimit-Remaining-Day",
+    ],
 )
 
 orchestrator = Agente000Orchestrator()
@@ -102,6 +111,14 @@ _main_logger.info(
 google_auth = GoogleOAuthManager(orchestrator.security_config, db)
 
 _AR_TIMEZONE = timezone(timedelta(hours=-3))
+ANTIBOT_RATE_LIMIT_MAX_PER_HOUR: int = 2
+ANTIBOT_RATE_LIMIT_MAX_PER_DAY: int = 2
+_ANTIBOT_HOUR_WINDOW_SECONDS: int = 3600
+_ANTIBOT_RETENTION_SECONDS: int = 172800
+_ANTIBOT_RATE_LIMIT_DETAIL = (
+    "Alcanzaste el límite de 2 consultas gratuitas por hora y por día desde esta conexión o dispositivo. "
+    "Habilitá tu pase con Lemon Squeezy para continuar sin esperas o intentá más tarde."
+)
 _DAILY_FUNNEL_STEP_2_DETAIL = (
     "Ya utilizaste tu consulta gratuita de prueba. "
     "Compartí en redes sociales para desbloquear tu 2ª consulta del día o habilitá tu pase con Lemon Squeezy."
@@ -167,6 +184,264 @@ def _ensure_daily_funnel_schema() -> None:
 
 
 _ensure_daily_funnel_schema()
+
+
+@dataclass(frozen=True)
+class AntiBotRateLimitStatus:
+    """Estado de control de tasa anti-bots por combinación IP + X-Device-Fingerprint."""
+
+    hourly_count: int
+    daily_count: int
+    is_privileged: bool
+    is_blocked: bool
+    retry_after_seconds: int
+
+
+def _ensure_antibot_rate_limit_schema() -> None:
+    """Crea la tabla e índices del control de tasa anti-bots en SQLite."""
+    try:
+        with db._connect() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS antibot_rate_limit_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    scope_key TEXT NOT NULL,
+                    day_key TEXT NOT NULL,
+                    created_epoch INTEGER NOT NULL,
+                    created_at_iso TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_antibot_rl_scope_epoch
+                ON antibot_rate_limit_events (scope_key, created_epoch)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_antibot_rl_scope_day
+                ON antibot_rate_limit_events (scope_key, day_key)
+                """
+            )
+    except Exception as exc:
+        _main_logger.error("Error inicializando tabla antibot_rate_limit_events: %s", exc)
+        raise
+
+
+_ensure_antibot_rate_limit_schema()
+
+
+def _antibot_rate_limit_keys(request: Request) -> list[str]:
+    """Construye claves anti-bots para la combinación IP + X-Device-Fingerprint."""
+    client_ip = _extract_client_ip(request)
+    device_fp = _extract_device_fingerprint(request)
+    keys: list[str] = []
+    if client_ip and device_fp:
+        keys.append(f"combo:{client_ip}|{device_fp}")
+    if client_ip:
+        keys.append(f"ip:{client_ip}")
+    if device_fp:
+        keys.append(f"fp:{device_fp}")
+    return keys
+
+
+def _evaluate_antibot_window(
+    *,
+    hourly_count: int,
+    daily_count: int,
+    oldest_hour_epoch: int | None,
+    now_epoch: int,
+    now_ar: datetime,
+    is_privileged: bool,
+) -> AntiBotRateLimitStatus:
+    """Evalúa si se superó el tope de 2 consultas gratuitas/hora o 2/día."""
+    if is_privileged:
+        return AntiBotRateLimitStatus(
+            hourly_count=0,
+            daily_count=0,
+            is_privileged=True,
+            is_blocked=False,
+            retry_after_seconds=0,
+        )
+
+    safe_hourly = max(0, int(hourly_count))
+    safe_daily = max(0, int(daily_count))
+    over_hour = safe_hourly >= ANTIBOT_RATE_LIMIT_MAX_PER_HOUR
+    over_day = safe_daily >= ANTIBOT_RATE_LIMIT_MAX_PER_DAY
+    is_blocked = over_hour or over_day
+
+    retry_after = 0
+    if over_day:
+        next_midnight = (now_ar + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        retry_after = max(1, int((next_midnight - now_ar).total_seconds()))
+    elif over_hour:
+        base_epoch = int(oldest_hour_epoch) if oldest_hour_epoch is not None else now_epoch
+        retry_after = max(1, (base_epoch + _ANTIBOT_HOUR_WINDOW_SECONDS) - now_epoch)
+
+    return AntiBotRateLimitStatus(
+        hourly_count=safe_hourly,
+        daily_count=safe_daily,
+        is_privileged=False,
+        is_blocked=is_blocked,
+        retry_after_seconds=retry_after,
+    )
+
+
+def _apply_antibot_rate_limit_headers(response: Response, status_obj: AntiBotRateLimitStatus) -> None:
+    """Expone encabezados informativos del control de tasa por IP y huella de dispositivo."""
+    response.headers["X-RateLimit-Limit-Hour"] = str(ANTIBOT_RATE_LIMIT_MAX_PER_HOUR)
+    response.headers["X-RateLimit-Limit-Day"] = str(ANTIBOT_RATE_LIMIT_MAX_PER_DAY)
+    if status_obj.is_privileged:
+        response.headers["X-RateLimit-Remaining-Hour"] = "unlimited"
+        response.headers["X-RateLimit-Remaining-Day"] = "unlimited"
+    else:
+        response.headers["X-RateLimit-Remaining-Hour"] = str(
+            max(0, ANTIBOT_RATE_LIMIT_MAX_PER_HOUR - status_obj.hourly_count)
+        )
+        response.headers["X-RateLimit-Remaining-Day"] = str(
+            max(0, ANTIBOT_RATE_LIMIT_MAX_PER_DAY - status_obj.daily_count)
+        )
+
+
+def _enforce_antibot_rate_limit(
+    user: UserProfileResponse,
+    request: Request,
+    response: Response,
+) -> AntiBotRateLimitStatus:
+    """Rechaza con HTTP 429 si una IP/huella excedió 2 consultas gratuitas por hora o día."""
+    now_ar = datetime.now(_AR_TIMEZONE)
+    now_epoch = int(now_ar.timestamp())
+    if _is_privileged_user(user):
+        priv_status = _evaluate_antibot_window(
+            hourly_count=0,
+            daily_count=0,
+            oldest_hour_epoch=None,
+            now_epoch=now_epoch,
+            now_ar=now_ar,
+            is_privileged=True,
+        )
+        _apply_antibot_rate_limit_headers(response, priv_status)
+        return priv_status
+
+    scope_keys = _antibot_rate_limit_keys(request)
+    if not scope_keys:
+        empty_status = _evaluate_antibot_window(
+            hourly_count=0,
+            daily_count=0,
+            oldest_hour_epoch=None,
+            now_epoch=now_epoch,
+            now_ar=now_ar,
+            is_privileged=False,
+        )
+        _apply_antibot_rate_limit_headers(response, empty_status)
+        return empty_status
+
+    day_key = now_ar.strftime("%Y-%m-%d")
+    hour_cutoff = now_epoch - _ANTIBOT_HOUR_WINDOW_SECONDS
+    placeholders = ",".join("?" for _ in scope_keys)
+    try:
+        with db._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT
+                    scope_key,
+                    SUM(CASE WHEN created_epoch >= ? THEN 1 ELSE 0 END) AS hour_hits,
+                    MIN(CASE WHEN created_epoch >= ? THEN created_epoch ELSE NULL END) AS oldest_hour_epoch,
+                    SUM(CASE WHEN day_key = ? THEN 1 ELSE 0 END) AS day_hits
+                FROM antibot_rate_limit_events
+                WHERE scope_key IN ({placeholders})
+                  AND (created_epoch >= ? OR day_key = ?)
+                GROUP BY scope_key
+                """,
+                [hour_cutoff, hour_cutoff, day_key, *scope_keys, hour_cutoff, day_key],
+            ).fetchall()
+    except Exception as exc:
+        _main_logger.error("Error consultando control de tasa anti-bots: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error verificando el control de tasa de consultas.",
+        ) from exc
+
+    hourly_count = max((int(r["hour_hits"] or 0) for r in rows), default=0)
+    daily_count = max((int(r["day_hits"] or 0) for r in rows), default=0)
+    oldest_candidates = [
+        int(r["oldest_hour_epoch"])
+        for r in rows
+        if r["oldest_hour_epoch"] is not None and int(r["hour_hits"] or 0) >= ANTIBOT_RATE_LIMIT_MAX_PER_HOUR
+    ]
+    oldest_hour_epoch = min(oldest_candidates) if oldest_candidates else None
+
+    rl_status = _evaluate_antibot_window(
+        hourly_count=hourly_count,
+        daily_count=daily_count,
+        oldest_hour_epoch=oldest_hour_epoch,
+        now_epoch=now_epoch,
+        now_ar=now_ar,
+        is_privileged=False,
+    )
+
+    if rl_status.is_blocked:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=_ANTIBOT_RATE_LIMIT_DETAIL,
+            headers={
+                "Retry-After": str(rl_status.retry_after_seconds),
+                "X-RateLimit-Limit-Hour": str(ANTIBOT_RATE_LIMIT_MAX_PER_HOUR),
+                "X-RateLimit-Limit-Day": str(ANTIBOT_RATE_LIMIT_MAX_PER_DAY),
+                "X-RateLimit-Remaining-Hour": str(max(0, ANTIBOT_RATE_LIMIT_MAX_PER_HOUR - rl_status.hourly_count)),
+                "X-RateLimit-Remaining-Day": str(max(0, ANTIBOT_RATE_LIMIT_MAX_PER_DAY - rl_status.daily_count)),
+            },
+        )
+
+    _apply_antibot_rate_limit_headers(response, rl_status)
+    return rl_status
+
+
+def _consume_antibot_rate_limit_slot(
+    user: UserProfileResponse,
+    request: Request,
+    response: Response,
+) -> None:
+    """Registra una consulta gratuita consumida para las claves IP y huella del solicitante."""
+    if _is_privileged_user(user):
+        return
+    scope_keys = _antibot_rate_limit_keys(request)
+    if not scope_keys:
+        return
+
+    now_ar = datetime.now(_AR_TIMEZONE)
+    now_epoch = int(now_ar.timestamp())
+    now_iso = now_ar.isoformat()
+    day_key = now_ar.strftime("%Y-%m-%d")
+    purge_cutoff = now_epoch - _ANTIBOT_RETENTION_SECONDS
+
+    try:
+        with db._connect() as conn:
+            conn.execute(
+                "DELETE FROM antibot_rate_limit_events WHERE created_epoch < ?",
+                (purge_cutoff,),
+            )
+            for key in scope_keys:
+                conn.execute(
+                    """
+                    INSERT INTO antibot_rate_limit_events (scope_key, day_key, created_epoch, created_at_iso)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (key, day_key, now_epoch, now_iso),
+                )
+    except Exception as exc:
+        _main_logger.error("Error registrando evento de control de tasa anti-bots: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error actualizando el control de tasa de consultas.",
+        ) from exc
+
+    # Actualizar encabezados restantes tras consumir el cupo actual
+    current_hour_rem = int(response.headers.get("X-RateLimit-Remaining-Hour", str(ANTIBOT_RATE_LIMIT_MAX_PER_HOUR)))
+    current_day_rem = int(response.headers.get("X-RateLimit-Remaining-Day", str(ANTIBOT_RATE_LIMIT_MAX_PER_DAY)))
+    response.headers["X-RateLimit-Remaining-Hour"] = str(max(0, current_hour_rem - 1))
+    response.headers["X-RateLimit-Remaining-Day"] = str(max(0, current_day_rem - 1))
 
 
 def _current_ar_day_key() -> str:
@@ -823,7 +1098,10 @@ async def analyze_expediente_endpoint(
             detail="Este documento ya fue procesado bajo una prueba gratuita",
         )
 
-    # 2. Embudo Progresivo de Consultas Diarias (Cuenta + IP + X-Device-Fingerprint)
+    # 2. Control de Tasa Anti-Bots por IP + X-Device-Fingerprint (máx. 2/hora y 2/día)
+    _enforce_antibot_rate_limit(user, request, response)
+
+    # 3. Embudo Progresivo de Consultas Diarias (Cuenta + IP + X-Device-Fingerprint)
     funnel_status = _enforce_daily_funnel_gate(user, request, response)
     is_free_user = not funnel_status.is_privileged
 
@@ -849,8 +1127,9 @@ async def analyze_expediente_endpoint(
             is_free_tier=is_free_user,
         )
 
-        # 4. Consumir cupo en el embudo diario (y actualizar contador en base de datos)
+        # 4. Consumir cupo en el embudo diario y registrar evento anti-bots (y actualizar contador en DB)
         _consume_daily_funnel_slot(user, request, response)
+        _consume_antibot_rate_limit_slot(user, request, response)
 
         # 5. Guardar automáticamente en el Dashboard de causas del usuario
         case_tracker.record_case_from_final_report(
@@ -909,6 +1188,7 @@ async def emergency_scan_endpoint(
     _user: Annotated[UserProfileResponse, Depends(get_current_user)],
 ) -> EmergencyScanResponse:
     """Escáner '¡No Firmes Todavía!' para cláusulas de renuncia o resoluciones urgentes."""
+    _enforce_antibot_rate_limit(_user, http_request, response)
     _enforce_daily_funnel_gate(_user, http_request, response)
 
     try:
@@ -960,6 +1240,7 @@ async def repository_consult_endpoint(
     _user: Annotated[UserProfileResponse, Depends(get_current_user)],
 ) -> RepositoryConsultResponse:
     """Consulta normativa y generación de respuesta dinámica con IA en lenguaje claro."""
+    _enforce_antibot_rate_limit(_user, http_request, response)
     _enforce_daily_funnel_gate(_user, http_request, response)
 
     try:
@@ -973,6 +1254,7 @@ async def repository_consult_endpoint(
             city_locality=request.city_locality,
         )
         _consume_daily_funnel_slot(_user, http_request, response)
+        _consume_antibot_rate_limit_slot(_user, http_request, response)
         return RepositoryConsultResponse(
             classified_fuero=base_resp.classified_fuero,
             province_jurisdiction=base_resp.province_jurisdiction,

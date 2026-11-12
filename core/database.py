@@ -7,10 +7,11 @@ o PostgreSQL en Supabase / Neon mediante DATABASE_URL.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
 from pathlib import Path
+import re
 import sqlite3
 from typing import Any, Literal
 
@@ -109,6 +110,17 @@ class DrHDatabase:
                     created_at_iso TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_payments_email ON payments(user_email);
+
+                CREATE TABLE IF NOT EXISTS daily_metrics (
+                    metric_date TEXT PRIMARY KEY,
+                    visits_without_query INTEGER NOT NULL DEFAULT 0,
+                    users_single_query INTEGER NOT NULL DEFAULT 0,
+                    users_two_queries INTEGER NOT NULL DEFAULT 0,
+                    users_three_plus_queries INTEGER NOT NULL DEFAULT 0,
+                    total_queries_executed INTEGER NOT NULL DEFAULT 0,
+                    updated_at_iso TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_daily_metrics_date ON daily_metrics(metric_date);
                 """
             )
             # Asegurar columna is_admin en bases existentes con default 0 (False)
@@ -558,3 +570,178 @@ class DrHDatabase:
                 d["questions_generated"] = json.loads(d["questions_generated_json"])
                 result.append(d)
             return result
+
+    # ------------------------------------------------------------------
+    # TELEMETRÍA DIARIA ANÓNIMA (ZERO PII)
+    # ------------------------------------------------------------------
+
+    _RE_METRIC_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+    @classmethod
+    def _validate_metric_date(cls, metric_date: str) -> str:
+        """Valida formato YYYY-MM-DD para claves de métricas diarias."""
+        clean = str(metric_date or "").strip()
+        if not cls._RE_METRIC_DATE.match(clean):
+            raise ValueError("metric_date debe tener formato estricto YYYY-MM-DD.")
+        date.fromisoformat(clean)
+        return clean
+
+    def _ensure_daily_metric_row(self, conn: sqlite3.Connection, clean_date: str, now_iso: str) -> None:
+        """Asegura que exista la fila anónima del día sin sobrescribir contadores."""
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO daily_metrics (
+                metric_date, visits_without_query, users_single_query,
+                users_two_queries, users_three_plus_queries, total_queries_executed, updated_at_iso
+            ) VALUES (?, 0, 0, 0, 0, 0, ?)
+            """,
+            (clean_date, now_iso),
+        )
+
+    def record_daily_metric_visit(self, metric_date: str) -> dict[str, Any]:
+        """Incrementa el contador anónimo de visitas sin consulta para la fecha dada."""
+        clean_date = self._validate_metric_date(metric_date)
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with self._connect() as conn:
+            self._ensure_daily_metric_row(conn, clean_date, now_iso)
+            conn.execute(
+                """
+                UPDATE daily_metrics
+                SET visits_without_query = visits_without_query + 1,
+                    updated_at_iso = ?
+                WHERE metric_date = ?
+                """,
+                (now_iso, clean_date),
+            )
+            row = conn.execute(
+                "SELECT * FROM daily_metrics WHERE metric_date = ?",
+                (clean_date,),
+            ).fetchone()
+            return dict(row)
+
+    def record_daily_metric_transition(
+        self,
+        metric_date: str,
+        *,
+        prev_bucket: int,
+        new_bucket: int,
+        ai_query_executed: bool = True,
+    ) -> dict[str, Any]:
+        """Actualiza atómicamente los buckets anónimos (0=visita, 1=1q, 2=2q, 3=3+q) y total IA."""
+        clean_date = self._validate_metric_date(metric_date)
+        prev_b = max(0, min(3, int(prev_bucket)))
+        new_b = max(0, min(3, int(new_bucket)))
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        delta_visits = 0
+        delta_single = 0
+        delta_two = 0
+        delta_three_plus = 0
+        delta_total_ai = 1 if ai_query_executed else 0
+
+        if new_b > prev_b:
+            if prev_b == 0:
+                delta_visits -= 1
+            elif prev_b == 1:
+                delta_single -= 1
+            elif prev_b == 2:
+                delta_two -= 1
+
+            if new_b == 1:
+                delta_single += 1
+            elif new_b == 2:
+                delta_two += 1
+            elif new_b >= 3:
+                delta_three_plus += 1
+
+        with self._connect() as conn:
+            self._ensure_daily_metric_row(conn, clean_date, now_iso)
+            conn.execute(
+                """
+                UPDATE daily_metrics
+                SET visits_without_query = MAX(0, visits_without_query + ?),
+                    users_single_query = MAX(0, users_single_query + ?),
+                    users_two_queries = MAX(0, users_two_queries + ?),
+                    users_three_plus_queries = MAX(0, users_three_plus_queries + ?),
+                    total_queries_executed = MAX(0, total_queries_executed + ?),
+                    updated_at_iso = ?
+                WHERE metric_date = ?
+                """,
+                (
+                    delta_visits,
+                    delta_single,
+                    delta_two,
+                    delta_three_plus,
+                    delta_total_ai,
+                    now_iso,
+                    clean_date,
+                ),
+            )
+            row = conn.execute(
+                "SELECT * FROM daily_metrics WHERE metric_date = ?",
+                (clean_date,),
+            ).fetchone()
+            return dict(row)
+
+    def get_daily_metrics_summary(self, reference_date: str, days: int = 7) -> dict[str, Any]:
+        """Devuelve el resumen anónimo del día y de los últimos N días calendario (default 7)."""
+        clean_ref = self._validate_metric_date(reference_date)
+        safe_days = max(1, min(90, int(days)))
+        end_d = date.fromisoformat(clean_ref)
+        start_d = end_d - timedelta(days=safe_days - 1)
+
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT metric_date, visits_without_query, users_single_query,
+                       users_two_queries, users_three_plus_queries,
+                       total_queries_executed, updated_at_iso
+                FROM daily_metrics
+                WHERE metric_date BETWEEN ? AND ?
+                ORDER BY metric_date DESC
+                """,
+                (start_d.isoformat(), end_d.isoformat()),
+            ).fetchall()
+
+        by_date = {str(r["metric_date"]): dict(r) for r in rows}
+        series: list[dict[str, Any]] = []
+        totals = {
+            "visits_without_query": 0,
+            "users_single_query": 0,
+            "users_two_queries": 0,
+            "users_three_plus_queries": 0,
+            "total_queries_executed": 0,
+        }
+
+        for offset in range(safe_days):
+            day_str = (end_d - timedelta(days=offset)).isoformat()
+            item = by_date.get(
+                day_str,
+                {
+                    "metric_date": day_str,
+                    "visits_without_query": 0,
+                    "users_single_query": 0,
+                    "users_two_queries": 0,
+                    "users_three_plus_queries": 0,
+                    "total_queries_executed": 0,
+                    "updated_at_iso": "",
+                },
+            )
+            normalized = {
+                "metric_date": day_str,
+                "visits_without_query": int(item["visits_without_query"] or 0),
+                "users_single_query": int(item["users_single_query"] or 0),
+                "users_two_queries": int(item["users_two_queries"] or 0),
+                "users_three_plus_queries": int(item["users_three_plus_queries"] or 0),
+                "total_queries_executed": int(item["total_queries_executed"] or 0),
+                "updated_at_iso": str(item.get("updated_at_iso") or ""),
+            }
+            series.append(normalized)
+            for k in totals:
+                totals[k] += normalized[k]
+
+        return {
+            "today": series[0],
+            "last_7_days": series,
+            "totals_7_days": totals,
+        }

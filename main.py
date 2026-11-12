@@ -21,6 +21,7 @@ import logging
 import os
 from pathlib import Path
 import re
+import secrets
 import sys
 from typing import Annotated, Any, Literal
 
@@ -153,6 +154,93 @@ class DailyStatusResponse(BaseModel):
     is_privileged: bool
     funnel_step: int
     allow_social_unlock: bool
+
+
+class DailyMetricRow(BaseModel):
+    """Fila diaria anónima de métricas de uso (sin datos personales)."""
+
+    metric_date: str
+    visits_without_query: int
+    users_single_query: int
+    users_two_queries: int
+    users_three_plus_queries: int
+    total_queries_executed: int
+    updated_at_iso: str = ""
+
+
+class DailyMetricsTotals(BaseModel):
+    """Sumatoria agregada de métricas anónimas de los últimos 7 días."""
+
+    visits_without_query: int
+    users_single_query: int
+    users_two_queries: int
+    users_three_plus_queries: int
+    total_queries_executed: int
+
+
+class DailyMetricsAdminResponse(BaseModel):
+    """Resumen de métricas anónimas de hoy y los últimos 7 días para ADMIN_EMAILS."""
+
+    today: DailyMetricRow
+    last_7_days: list[DailyMetricRow]
+    totals_7_days: DailyMetricsTotals
+
+
+class MetricVisitResponse(BaseModel):
+    """Confirmación liviana del registro de visita anónima diaria."""
+
+    recorded: bool
+    metric_date: str
+
+
+_ANON_METRIC_RUNTIME_SALT: str = secrets.token_hex(16)
+_ANON_METRIC_STAGE_CACHE: dict[str, int] = {}
+
+
+def _require_strict_admin_user(user: UserProfileResponse) -> UserProfileResponse:
+    """Restringe acceso exclusivamente a cuentas listadas en ADMIN_EMAILS."""
+    if not is_whitelisted_admin_email(user.email):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Acceso restringido únicamente a cuentas autorizadas en ADMIN_EMAILS.",
+        )
+    return user
+
+
+def _record_anonymous_query_metric(
+    day_key: str,
+    session_seed: str,
+    *,
+    ai_query_executed: bool = True,
+    target_bucket_override: int | None = None,
+) -> None:
+    """Actualiza buckets anónimos (0->1->2->3+) sin almacenar emails, nombres ni IPs."""
+    try:
+        opaque_digest = hashlib.sha256(
+            f"{_ANON_METRIC_RUNTIME_SALT}:{day_key}:{session_seed}".encode("utf-8")
+        ).hexdigest()
+        if len(_ANON_METRIC_STAGE_CACHE) > 20000:
+            stale_keys = [k for k in _ANON_METRIC_STAGE_CACHE if not k.startswith(f"{day_key}:")]
+            for k in stale_keys:
+                _ANON_METRIC_STAGE_CACHE.pop(k, None)
+
+        cache_key = f"{day_key}:{opaque_digest}"
+        prev_stage = _ANON_METRIC_STAGE_CACHE.get(cache_key, 0)
+        if target_bucket_override is not None:
+            next_stage = max(prev_stage, min(3, int(target_bucket_override)))
+        else:
+            next_stage = min(3, prev_stage + 1)
+
+        if next_stage > prev_stage or ai_query_executed:
+            db.record_daily_metric_transition(
+                day_key,
+                prev_bucket=prev_stage,
+                new_bucket=next_stage,
+                ai_query_executed=ai_query_executed,
+            )
+            _ANON_METRIC_STAGE_CACHE[cache_key] = next_stage
+    except Exception as exc:
+        _main_logger.warning("No se pudo actualizar la métrica diaria anónima: %s", exc)
 
 
 def _ensure_daily_funnel_schema() -> None:
@@ -657,6 +745,12 @@ def _enforce_daily_funnel_gate(
             },
         )
 
+    _record_anonymous_query_metric(
+        status_obj.day_key,
+        user.email,
+        ai_query_executed=False,
+        target_bucket_override=3,
+    )
     raise HTTPException(
         status_code=status.HTTP_402_PAYMENT_REQUIRED,
         detail=_DAILY_FUNNEL_STEP_3_DETAIL,
@@ -684,6 +778,11 @@ def _consume_daily_funnel_slot(
                     daily_count=status_obj.used_today,
                     funnel_step=1,
                     allow_social_unlock=False,
+                )
+                _record_anonymous_query_metric(
+                    status_obj.day_key,
+                    user.email,
+                    ai_query_executed=True,
                 )
                 return status_obj
 
@@ -717,6 +816,12 @@ def _consume_daily_funnel_slot(
                 )
 
         db.increment_free_consultations(user.email)
+        _record_anonymous_query_metric(
+            status_obj.day_key,
+            user.email,
+            ai_query_executed=True,
+            target_bucket_override=min(3, new_count),
+        )
         resulting_step = 1 if new_count == 1 else (2 if new_count == 2 else 3)
         _apply_funnel_headers(
             response,
@@ -1792,6 +1897,57 @@ async def cron_07am_endpoint(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error en la ingesta 07:00 AM: {exc}",
+        ) from exc
+
+
+# =========================================================================
+# TELEMETRÍA ANÓNIMA Y MÉTRICAS ADMIN (ZERO PII)
+# =========================================================================
+
+@app.post(
+    "/metrics/visit",
+    response_model=MetricVisitResponse,
+    status_code=status.HTTP_200_OK,
+    tags=["Métricas Anónimas"],
+)
+async def register_anonymous_visit_endpoint() -> MetricVisitResponse:
+    """Registra una visita anónima sin consultar ni guardar IP, email o identidad."""
+    day_key = _current_ar_day_key()
+    try:
+        db.record_daily_metric_visit(day_key)
+        return MetricVisitResponse(recorded=True, metric_date=day_key)
+    except Exception as exc:
+        _main_logger.error("Error registrando visita anónima: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error registrando la métrica anónima diaria.",
+        ) from exc
+
+
+@app.get(
+    "/admin/metrics/daily",
+    response_model=DailyMetricsAdminResponse,
+    status_code=status.HTTP_200_OK,
+    tags=["Panel Administrador"],
+)
+async def get_admin_daily_metrics_endpoint(
+    user: Annotated[UserProfileResponse, Depends(get_current_user)],
+) -> DailyMetricsAdminResponse:
+    """Devuelve resumen de métricas anónimas de hoy y los últimos 7 días solo para ADMIN_EMAILS."""
+    _require_strict_admin_user(user)
+    day_key = _current_ar_day_key()
+    try:
+        summary = db.get_daily_metrics_summary(day_key, days=7)
+        return DailyMetricsAdminResponse(
+            today=DailyMetricRow(**summary["today"]),
+            last_7_days=[DailyMetricRow(**row) for row in summary["last_7_days"]],
+            totals_7_days=DailyMetricsTotals(**summary["totals_7_days"]),
+        )
+    except Exception as exc:
+        _main_logger.error("Error obteniendo métricas diarias para admin: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error consultando las métricas diarias.",
         ) from exc
 
 

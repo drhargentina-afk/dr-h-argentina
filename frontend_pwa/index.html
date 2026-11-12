@@ -593,16 +593,53 @@
     <!-- ÁREA DE CONSULTA Y SEGUIMIENTO -->
     <div id="app-workspace" class="hidden" style="display:flex;flex-direction:column;gap:1.5rem;">
       <!-- PANEL ADMIN (MODO DIOS): ARRANCA OCULTO -->
-      <div id="admin-toolbar" class="panel-card hidden" style="display:none;flex-direction:row;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.75rem;padding:0.85rem 1.15rem;border:2px dashed var(--accent-brand);background-color:var(--bg-elevated);" role="region" aria-label="Panel Administrador">
-        <strong style="font-size:0.92rem;">🛠️ Panel Admin (Modo Dios):</strong>
-        <div style="display:flex;align-items:center;gap:0.5rem;">
-          <button id="btn-admin-mode-free" type="button" class="btn btn-secondary" style="font-size:0.85rem;padding:0.4rem 0.9rem;">
-            Modo Gratis
-          </button>
-          <button id="btn-admin-mode-premium" type="button" class="btn btn-primary" style="font-size:0.85rem;padding:0.4rem 0.9rem;">
-            Modo Premium
-          </button>
+      <div id="admin-toolbar" class="panel-card hidden" style="display:none;flex-direction:column;gap:0.75rem;padding:0.85rem 1.15rem;border:2px dashed var(--accent-brand);background-color:var(--bg-elevated);" role="region" aria-label="Panel Administrador">
+        <div style="display:flex;flex-direction:row;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.75rem;width:100%;">
+          <strong style="font-size:0.92rem;">🛠️ Panel Admin (Modo Dios):</strong>
+          <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
+            <button id="btn-admin-mode-free" type="button" class="btn btn-secondary" style="font-size:0.85rem;padding:0.4rem 0.9rem;">
+              Modo Gratis
+            </button>
+            <button id="btn-admin-mode-premium" type="button" class="btn btn-primary" style="font-size:0.85rem;padding:0.4rem 0.9rem;">
+              Modo Premium
+            </button>
+            <button id="btn-admin-toggle-metrics" type="button" class="btn btn-secondary" aria-expanded="false" aria-controls="admin-metrics-panel" style="font-size:0.85rem;padding:0.4rem 0.9rem;">
+              📊 Métricas Diarias
+            </button>
+          </div>
         </div>
+
+        <section id="admin-metrics-panel" class="hidden" style="display:none;flex-direction:column;gap:0.75rem;width:100%;padding-top:0.75rem;border-top:1px solid var(--border-subtle, rgba(148,163,184,0.35));" aria-label="Métricas Diarias Anónimas">
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.5rem;">
+            <span style="font-size:0.88rem;font-weight:600;">Resumen anónimo de hoy y últimos 7 días (sin datos personales)</span>
+            <button id="btn-admin-refresh-metrics" type="button" class="btn btn-secondary" style="font-size:0.8rem;padding:0.3rem 0.75rem;">
+              Actualizar
+            </button>
+          </div>
+          <div id="admin-metrics-loading" class="state-banner loading hidden" role="status">Cargando métricas anónimas...</div>
+          <div id="admin-metrics-error" class="state-banner error hidden" role="alert"></div>
+          <div id="admin-metrics-empty" class="hidden" style="font-size:0.85rem;color:var(--text-secondary);">
+            Todavía no hay actividad registrada en los últimos 7 días.
+          </div>
+          <div id="admin-metrics-content" class="hidden" style="display:flex;flex-direction:column;gap:0.75rem;">
+            <div id="admin-metrics-today-cards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(8.5rem,1fr));gap:0.5rem;"></div>
+            <div style="overflow-x:auto;width:100%;">
+              <table style="width:100%;border-collapse:collapse;font-size:0.82rem;text-align:left;">
+                <thead>
+                  <tr style="border-bottom:1px solid var(--border-subtle, rgba(148,163,184,0.35));color:var(--text-secondary);">
+                    <th style="padding:0.4rem 0.5rem;">Fecha</th>
+                    <th style="padding:0.4rem 0.5rem;">Visitas s/ consulta</th>
+                    <th style="padding:0.4rem 0.5rem;">1 consulta</th>
+                    <th style="padding:0.4rem 0.5rem;">2 consultas (Social)</th>
+                    <th style="padding:0.4rem 0.5rem;">3+ (Comercial)</th>
+                    <th style="padding:0.4rem 0.5rem;">Total IA</th>
+                  </tr>
+                </thead>
+                <tbody id="admin-metrics-7d-body"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
       </div>
 
       <!-- 2. CAJA ÚNICA DE CONSULTA (TRIAGE 100% AUTOMÁTICO - CERO FUEROS MANUALES) -->

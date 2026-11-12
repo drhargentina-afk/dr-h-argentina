@@ -561,6 +561,11 @@
         } else {
           adminToolbar.classList.add("hidden");
           adminToolbar.style.display = "none";
+          const metricsPanel = document.getElementById("admin-metrics-panel");
+          if (metricsPanel) {
+            metricsPanel.classList.add("hidden");
+            metricsPanel.style.display = "none";
+          }
         }
       }
       if (userBadge) {
@@ -635,6 +640,11 @@
       if (adminToolbar) {
         adminToolbar.classList.add("hidden");
         adminToolbar.style.display = "none";
+        const metricsPanel = document.getElementById("admin-metrics-panel");
+        if (metricsPanel) {
+          metricsPanel.classList.add("hidden");
+          metricsPanel.style.display = "none";
+        }
       }
       if (userBadge) {
         userBadge.textContent = "";
@@ -2046,6 +2056,165 @@
         }
       });
     }
+
+    const btnToggleMetrics = document.getElementById("btn-admin-toggle-metrics");
+    const metricsPanel = document.getElementById("admin-metrics-panel");
+    const btnRefreshMetrics = document.getElementById("btn-admin-refresh-metrics");
+
+    if (btnToggleMetrics && metricsPanel) {
+      btnToggleMetrics.addEventListener("click", (e) => {
+        e.preventDefault();
+        const isCurrentlyHidden =
+          metricsPanel.classList.contains("hidden") || metricsPanel.style.display === "none";
+        if (isCurrentlyHidden) {
+          metricsPanel.classList.remove("hidden");
+          metricsPanel.style.display = "flex";
+          btnToggleMetrics.setAttribute("aria-expanded", "true");
+          loadAdminDailyMetrics();
+        } else {
+          metricsPanel.classList.add("hidden");
+          metricsPanel.style.display = "none";
+          btnToggleMetrics.setAttribute("aria-expanded", "false");
+        }
+      });
+    }
+
+    if (btnRefreshMetrics) {
+      btnRefreshMetrics.addEventListener("click", (e) => {
+        e.preventDefault();
+        loadAdminDailyMetrics();
+      });
+    }
+  }
+
+  function setAdminMetricsUiState(mode, errorMessage) {
+    const loadingEl = document.getElementById("admin-metrics-loading");
+    const errorEl = document.getElementById("admin-metrics-error");
+    const emptyEl = document.getElementById("admin-metrics-empty");
+    const contentEl = document.getElementById("admin-metrics-content");
+
+    [loadingEl, errorEl, emptyEl, contentEl].forEach((el) => {
+      if (el) {
+        el.classList.add("hidden");
+        el.style.display = "none";
+      }
+    });
+
+    if (mode === "loading" && loadingEl) {
+      loadingEl.classList.remove("hidden");
+      loadingEl.style.display = "";
+    } else if (mode === "error" && errorEl) {
+      errorEl.textContent = errorMessage || "No se pudieron cargar las métricas diarias.";
+      errorEl.classList.remove("hidden");
+      errorEl.style.display = "";
+    } else if (mode === "empty" && emptyEl) {
+      emptyEl.classList.remove("hidden");
+      emptyEl.style.display = "";
+    } else if (mode === "success" && contentEl) {
+      contentEl.classList.remove("hidden");
+      contentEl.style.display = "flex";
+    }
+  }
+
+  function renderAdminMetricsData(data) {
+    const todayCardsEl = document.getElementById("admin-metrics-today-cards");
+    const tbodyEl = document.getElementById("admin-metrics-7d-body");
+    const today = data?.today || {};
+    const rows = Array.isArray(data?.last_7_days) ? data.last_7_days : [];
+
+    const hasAnyActivity = rows.some(
+      (r) =>
+        Number(r.visits_without_query || 0) > 0 ||
+        Number(r.users_single_query || 0) > 0 ||
+        Number(r.users_two_queries || 0) > 0 ||
+        Number(r.users_three_plus_queries || 0) > 0 ||
+        Number(r.total_queries_executed || 0) > 0
+    );
+
+    if (!hasAnyActivity) {
+      setAdminMetricsUiState("empty");
+      return;
+    }
+
+    if (todayCardsEl) {
+      todayCardsEl.innerHTML = "";
+      const cardsSpec = [
+        { label: `Visitas s/ consulta (${today.metric_date || "Hoy"})`, val: today.visits_without_query || 0 },
+        { label: "1 consulta", val: today.users_single_query || 0 },
+        { label: "2 consultas (Social)", val: today.users_two_queries || 0 },
+        { label: "3+ (Comercial)", val: today.users_three_plus_queries || 0 },
+        { label: "Total IA hoy", val: today.total_queries_executed || 0 }
+      ];
+      cardsSpec.forEach((c) => {
+        const card = document.createElement("div");
+        card.style.cssText =
+          "padding:0.55rem 0.7rem;border-radius:0.5rem;border:1px solid var(--border-subtle, rgba(148,163,184,0.35));background:var(--bg-surface, transparent);display:flex;flex-direction:column;gap:0.15rem;";
+        const title = document.createElement("span");
+        title.style.cssText = "font-size:0.75rem;color:var(--text-secondary);";
+        title.textContent = c.label;
+        const num = document.createElement("strong");
+        num.style.cssText = "font-size:1.15rem;";
+        num.textContent = String(c.val);
+        card.appendChild(title);
+        card.appendChild(num);
+        todayCardsEl.appendChild(card);
+      });
+    }
+
+    if (tbodyEl) {
+      tbodyEl.innerHTML = "";
+      rows.forEach((r) => {
+        const tr = document.createElement("tr");
+        tr.style.borderBottom = "1px solid var(--border-subtle, rgba(148,163,184,0.2))";
+        [
+          r.metric_date || "",
+          r.visits_without_query || 0,
+          r.users_single_query || 0,
+          r.users_two_queries || 0,
+          r.users_three_plus_queries || 0,
+          r.total_queries_executed || 0
+        ].forEach((cellVal) => {
+          const td = document.createElement("td");
+          td.style.padding = "0.4rem 0.5rem";
+          td.textContent = String(cellVal);
+          tr.appendChild(td);
+        });
+        tbodyEl.appendChild(tr);
+      });
+    }
+
+    setAdminMetricsUiState("success");
+  }
+
+  async function loadAdminDailyMetrics() {
+    setAdminMetricsUiState("loading");
+    try {
+      const resp = await apiFetch("/admin/metrics/daily", { method: "GET" });
+      if (!resp.ok) {
+        const errBody = await resp.json().catch(() => ({}));
+        throw new Error(errBody.detail || `Error HTTP ${resp.status} cargando métricas.`);
+      }
+      const data = await resp.json();
+      renderAdminMetricsData(data);
+    } catch (err) {
+      setAdminMetricsUiState("error", err?.message || "Error consultando métricas diarias.");
+    }
+  }
+
+  async function trackAnonymousDailyVisit() {
+    const visitKey = "drh_anon_metric_visit_day";
+    const todayKey = new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+    try {
+      if (sessionStorage.getItem(visitKey) === todayKey) {
+        return;
+      }
+      const resp = await fetch("/metrics/visit", { method: "POST" });
+      if (resp.ok) {
+        sessionStorage.setItem(visitKey, todayKey);
+      }
+    } catch (err) {
+      console.warn("Telemetry visit notice:", err);
+    }
   }
 
   // =========================================================================
@@ -2153,7 +2322,8 @@
     document.getElementById("btn-run-full-analysis")?.addEventListener("click", runUnifiedConsultation);
     document.getElementById("btn-refresh-cases")?.addEventListener("click", loadUserCases);
 
-    // Restaurar sesión sin dejar rastros en DOM
+    // Restaurar sesión sin dejar rastros en DOM y registrar visita anónima diaria
     restoreActiveSession();
+    trackAnonymousDailyVisit();
   });
 })();

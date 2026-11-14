@@ -1306,6 +1306,14 @@
       }
 
       state.urgentPhotoMode = false;
+      const metricsPanel = document.getElementById("admin-metrics-panel");
+      if (
+        metricsPanel &&
+        !metricsPanel.classList.contains("hidden") &&
+        metricsPanel.style.display !== "none"
+      ) {
+        loadAdminDailyMetrics();
+      }
       updateConsultationBanner(
         "success",
         "¡Análisis completo! Abajo tenés el dictamen y los botones de acción rápida."
@@ -2175,7 +2183,7 @@
           r.total_queries_executed || 0
         ].forEach((cellVal) => {
           const td = document.createElement("td");
-          td.style.padding = "0.4rem 0.5rem";
+          td.style.cssText = "padding:0.32rem 0.42rem;font-size:0.74rem;white-space:nowrap;";
           td.textContent = String(cellVal);
           tr.appendChild(td);
         });
@@ -2205,12 +2213,21 @@
     const visitKey = "drh_anon_metric_visit_day";
     const todayKey = new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
     try {
-      if (sessionStorage.getItem(visitKey) === todayKey) {
+      if (
+        sessionStorage.getItem(visitKey) === todayKey ||
+        localStorage.getItem(visitKey) === todayKey
+      ) {
         return;
       }
-      const resp = await fetch("/metrics/visit", { method: "POST" });
+      const resp = await fetch("/metrics/visit", {
+        method: "POST",
+        headers: {
+          "X-Device-Fingerprint": getDeviceFingerprint()
+        }
+      });
       if (resp.ok) {
         sessionStorage.setItem(visitKey, todayKey);
+        localStorage.setItem(visitKey, todayKey);
       }
     } catch (err) {
       console.warn("Telemetry visit notice:", err);

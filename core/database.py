@@ -121,6 +121,17 @@ class DrHDatabase:
                     updated_at_iso TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_daily_metrics_date ON daily_metrics(metric_date);
+
+                CREATE TABLE IF NOT EXISTS daily_metric_visitors (
+                    metric_date TEXT NOT NULL,
+                    visitor_hash TEXT NOT NULL,
+                    queries_count INTEGER NOT NULL DEFAULT 0,
+                    visit_counted INTEGER NOT NULL DEFAULT 0,
+                    last_endpoint TEXT NOT NULL DEFAULT '',
+                    last_query_epoch INTEGER NOT NULL DEFAULT 0,
+                    updated_at_iso TEXT NOT NULL,
+                    PRIMARY KEY (metric_date, visitor_hash)
+                );
                 """
             )
             # Asegurar columna is_admin en bases existentes con default 0 (False)
@@ -598,21 +609,184 @@ class DrHDatabase:
             (clean_date, now_iso),
         )
 
-    def record_daily_metric_visit(self, metric_date: str) -> dict[str, Any]:
-        """Incrementa el contador anónimo de visitas sin consulta para la fecha dada."""
+    def record_daily_metric_visit(
+        self,
+        metric_date: str,
+        visitor_hash: str | None = None,
+    ) -> dict[str, Any]:
+        """Incrementa visits_without_query cuando un visitante entra por primera vez en el día (0 consultas hoy)."""
         clean_date = self._validate_metric_date(metric_date)
         now_iso = datetime.now(timezone.utc).isoformat()
+        clean_hash = str(visitor_hash or "").strip()
+
         with self._connect() as conn:
             self._ensure_daily_metric_row(conn, clean_date, now_iso)
-            conn.execute(
+            should_increment = True
+            if clean_hash:
+                existing = conn.execute(
+                    """
+                    SELECT queries_count, visit_counted
+                    FROM daily_metric_visitors
+                    WHERE metric_date = ? AND visitor_hash = ?
+                    """,
+                    (clean_date, clean_hash),
+                ).fetchone()
+                if existing is not None:
+                    should_increment = False
+                else:
+                    conn.execute(
+                        """
+                        INSERT INTO daily_metric_visitors (
+                            metric_date, visitor_hash, queries_count, visit_counted,
+                            last_endpoint, last_query_epoch, updated_at_iso
+                        ) VALUES (?, ?, 0, 1, '', 0, ?)
+                        """,
+                        (clean_date, clean_hash, now_iso),
+                    )
+
+            if should_increment:
+                conn.execute(
+                    """
+                    UPDATE daily_metrics
+                    SET visits_without_query = visits_without_query + 1,
+                        updated_at_iso = ?
+                    WHERE metric_date = ?
+                    """,
+                    (now_iso, clean_date),
+                )
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM daily_metrics WHERE metric_date = ?",
+                (clean_date,),
+            ).fetchone()
+            return dict(row)
+
+    def record_daily_user_consultation(
+        self,
+        metric_date: str,
+        visitor_hash: str,
+        *,
+        endpoint: str = "",
+        now_epoch: int | None = None,
+    ) -> dict[str, Any]:
+        """Registra una consulta ejecutada en daily_metrics aplicando la matemática exacta por cantidad diaria (1, 2, 3, >=4)."""
+        clean_date = self._validate_metric_date(metric_date)
+        clean_hash = str(visitor_hash or "").strip()
+        if not clean_hash:
+            raise ValueError("visitor_hash es obligatorio para registrar la consulta diaria.")
+
+        now_dt = datetime.now(timezone.utc)
+        now_iso = now_dt.isoformat()
+        current_epoch = int(now_epoch if now_epoch is not None else now_dt.timestamp())
+        clean_endpoint = str(endpoint or "").strip()
+
+        with self._connect() as conn:
+            self._ensure_daily_metric_row(conn, clean_date, now_iso)
+            visitor_row = conn.execute(
                 """
-                UPDATE daily_metrics
-                SET visits_without_query = visits_without_query + 1,
-                    updated_at_iso = ?
-                WHERE metric_date = ?
+                SELECT queries_count, visit_counted, last_endpoint, last_query_epoch
+                FROM daily_metric_visitors
+                WHERE metric_date = ? AND visitor_hash = ?
                 """,
-                (now_iso, clean_date),
-            )
+                (clean_date, clean_hash),
+            ).fetchone()
+
+            if visitor_row is not None:
+                prev_count = int(visitor_row["queries_count"] or 0)
+                last_ep = str(visitor_row["last_endpoint"] or "")
+                last_ep_epoch = int(visitor_row["last_query_epoch"] or 0)
+                # Si el frontend llamó a /emergency-scan e inmediatamente a /repository-consult
+                # como parte de la misma consulta unificada, coalescemos para no duplicar el disparo.
+                if (
+                    clean_endpoint == "/repository-consult"
+                    and last_ep == "/emergency-scan"
+                    and prev_count >= 1
+                    and 0 <= (current_epoch - last_ep_epoch) <= 15
+                ):
+                    conn.execute(
+                        """
+                        UPDATE daily_metric_visitors
+                        SET last_endpoint = ?, last_query_epoch = ?, updated_at_iso = ?
+                        WHERE metric_date = ? AND visitor_hash = ?
+                        """,
+                        (clean_endpoint, current_epoch, now_iso, clean_date, clean_hash),
+                    )
+                    conn.commit()
+                    row = conn.execute(
+                        "SELECT * FROM daily_metrics WHERE metric_date = ?",
+                        (clean_date,),
+                    ).fetchone()
+                    return dict(row)
+
+                new_count = prev_count + 1
+                conn.execute(
+                    """
+                    UPDATE daily_metric_visitors
+                    SET queries_count = ?, last_endpoint = ?, last_query_epoch = ?, updated_at_iso = ?
+                    WHERE metric_date = ? AND visitor_hash = ?
+                    """,
+                    (new_count, clean_endpoint, current_epoch, now_iso, clean_date, clean_hash),
+                )
+            else:
+                new_count = 1
+                conn.execute(
+                    """
+                    INSERT INTO daily_metric_visitors (
+                        metric_date, visitor_hash, queries_count, visit_counted,
+                        last_endpoint, last_query_epoch, updated_at_iso
+                    ) VALUES (?, ?, 1, 1, ?, ?, ?)
+                    """,
+                    (clean_date, clean_hash, clean_endpoint, current_epoch, now_iso),
+                )
+
+            if new_count == 1:
+                conn.execute(
+                    """
+                    UPDATE daily_metrics
+                    SET visits_without_query = MAX(0, visits_without_query - 1),
+                        users_single_query = users_single_query + 1,
+                        total_queries_executed = total_queries_executed + 1,
+                        updated_at_iso = ?
+                    WHERE metric_date = ?
+                    """,
+                    (now_iso, clean_date),
+                )
+            elif new_count == 2:
+                conn.execute(
+                    """
+                    UPDATE daily_metrics
+                    SET users_single_query = MAX(0, users_single_query - 1),
+                        users_two_queries = users_two_queries + 1,
+                        total_queries_executed = total_queries_executed + 1,
+                        updated_at_iso = ?
+                    WHERE metric_date = ?
+                    """,
+                    (now_iso, clean_date),
+                )
+            elif new_count == 3:
+                conn.execute(
+                    """
+                    UPDATE daily_metrics
+                    SET users_two_queries = MAX(0, users_two_queries - 1),
+                        users_three_plus_queries = users_three_plus_queries + 1,
+                        total_queries_executed = total_queries_executed + 1,
+                        updated_at_iso = ?
+                    WHERE metric_date = ?
+                    """,
+                    (now_iso, clean_date),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE daily_metrics
+                    SET total_queries_executed = total_queries_executed + 1,
+                        updated_at_iso = ?
+                    WHERE metric_date = ?
+                    """,
+                    (now_iso, clean_date),
+                )
+
+            conn.commit()
             row = conn.execute(
                 "SELECT * FROM daily_metrics WHERE metric_date = ?",
                 (clean_date,),
@@ -677,6 +851,7 @@ class DrHDatabase:
                     clean_date,
                 ),
             )
+            conn.commit()
             row = conn.execute(
                 "SELECT * FROM daily_metrics WHERE metric_date = ?",
                 (clean_date,),

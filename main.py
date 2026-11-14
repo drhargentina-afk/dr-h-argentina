@@ -193,10 +193,6 @@ class MetricVisitResponse(BaseModel):
     metric_date: str
 
 
-_ANON_METRIC_RUNTIME_SALT: str = secrets.token_hex(16)
-_ANON_METRIC_STAGE_CACHE: dict[str, int] = {}
-
-
 def _require_strict_admin_user(user: UserProfileResponse) -> UserProfileResponse:
     """Restringe acceso exclusivamente a cuentas listadas en ADMIN_EMAILS."""
     if not is_whitelisted_admin_email(user.email):
@@ -207,40 +203,44 @@ def _require_strict_admin_user(user: UserProfileResponse) -> UserProfileResponse
     return user
 
 
-def _record_anonymous_query_metric(
-    day_key: str,
-    session_seed: str,
-    *,
-    ai_query_executed: bool = True,
-    target_bucket_override: int | None = None,
-) -> None:
-    """Actualiza buckets anónimos (0->1->2->3+) sin almacenar emails, nombres ni IPs."""
-    try:
-        opaque_digest = hashlib.sha256(
-            f"{_ANON_METRIC_RUNTIME_SALT}:{day_key}:{session_seed}".encode("utf-8")
+def _build_visit_hash_from_request(day_key: str, request: Request) -> str | None:
+    """Genera un hash SHA-256 anónimo de conexión/sesión para deduplicar recargas de página."""
+    auth_header = str(request.headers.get("authorization", "") or "").strip()
+    if auth_header.lower().startswith("bearer "):
+        raw_token = auth_header[7:].strip()
+        if raw_token:
+            return hashlib.sha256(f"drh-visit-tok:{day_key}:{raw_token}".encode("utf-8")).hexdigest()
+
+    device_fp = _extract_device_fingerprint(request)
+    client_ip = _extract_client_ip(request)
+    if device_fp or client_ip:
+        return hashlib.sha256(
+            f"drh-visit-net:{day_key}:{device_fp}:{client_ip}".encode("utf-8")
         ).hexdigest()
-        if len(_ANON_METRIC_STAGE_CACHE) > 20000:
-            stale_keys = [k for k in _ANON_METRIC_STAGE_CACHE if not k.startswith(f"{day_key}:")]
-            for k in stale_keys:
-                _ANON_METRIC_STAGE_CACHE.pop(k, None)
+    return None
 
-        cache_key = f"{day_key}:{opaque_digest}"
-        prev_stage = _ANON_METRIC_STAGE_CACHE.get(cache_key, 0)
-        if target_bucket_override is not None:
-            next_stage = max(prev_stage, min(3, int(target_bucket_override)))
-        else:
-            next_stage = min(3, prev_stage + 1)
 
-        if next_stage > prev_stage or ai_query_executed:
-            db.record_daily_metric_transition(
-                day_key,
-                prev_bucket=prev_stage,
-                new_bucket=next_stage,
-                ai_query_executed=ai_query_executed,
-            )
-            _ANON_METRIC_STAGE_CACHE[cache_key] = next_stage
+def _record_consultation_metric(
+    user: UserProfileResponse,
+    request: Request,
+    *,
+    endpoint: str,
+) -> None:
+    """Registra en daily_metrics la consulta ejecutada en cualquiera de los 3 endpoints de IA."""
+    day_key = _current_ar_day_key()
+    normalized_email = str(user.email or "").strip().lower()
+    device_fp = _extract_device_fingerprint(request)
+    client_ip = _extract_client_ip(request)
+    seed = normalized_email or f"{device_fp}:{client_ip}" or "anonymous"
+    visitor_hash = hashlib.sha256(f"drh-consult:{day_key}:{seed}".encode("utf-8")).hexdigest()
+    try:
+        db.record_daily_user_consultation(
+            day_key,
+            visitor_hash,
+            endpoint=endpoint,
+        )
     except Exception as exc:
-        _main_logger.warning("No se pudo actualizar la métrica diaria anónima: %s", exc)
+        _main_logger.error("Error actualizando daily_metrics en %s: %s", endpoint, exc)
 
 
 def _ensure_daily_funnel_schema() -> None:
@@ -745,12 +745,6 @@ def _enforce_daily_funnel_gate(
             },
         )
 
-    _record_anonymous_query_metric(
-        status_obj.day_key,
-        user.email,
-        ai_query_executed=False,
-        target_bucket_override=3,
-    )
     raise HTTPException(
         status_code=status.HTTP_402_PAYMENT_REQUIRED,
         detail=_DAILY_FUNNEL_STEP_3_DETAIL,
@@ -778,11 +772,6 @@ def _consume_daily_funnel_slot(
                     daily_count=status_obj.used_today,
                     funnel_step=1,
                     allow_social_unlock=False,
-                )
-                _record_anonymous_query_metric(
-                    status_obj.day_key,
-                    user.email,
-                    ai_query_executed=True,
                 )
                 return status_obj
 
@@ -816,12 +805,6 @@ def _consume_daily_funnel_slot(
                 )
 
         db.increment_free_consultations(user.email)
-        _record_anonymous_query_metric(
-            status_obj.day_key,
-            user.email,
-            ai_query_executed=True,
-            target_bucket_override=min(3, new_count),
-        )
         resulting_step = 1 if new_count == 1 else (2 if new_count == 2 else 3)
         _apply_funnel_headers(
             response,
@@ -1232,9 +1215,10 @@ async def analyze_expediente_endpoint(
             is_free_tier=is_free_user,
         )
 
-        # 4. Consumir cupo en el embudo diario y registrar evento anti-bots (y actualizar contador en DB)
+        # 4. Consumir cupo en el embudo diario, registrar evento anti-bots y actualizar daily_metrics
         _consume_daily_funnel_slot(user, request, response)
         _consume_antibot_rate_limit_slot(user, request, response)
+        _record_consultation_metric(user, request, endpoint="/analyze-expediente")
 
         # 5. Guardar automáticamente en el Dashboard de causas del usuario
         case_tracker.record_case_from_final_report(
@@ -1297,7 +1281,9 @@ async def emergency_scan_endpoint(
     _enforce_daily_funnel_gate(_user, http_request, response)
 
     try:
-        return orchestrator.run_emergency_scan(request)
+        scan_result = orchestrator.run_emergency_scan(request)
+        _record_consultation_metric(_user, http_request, endpoint="/emergency-scan")
+        return scan_result
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except Exception as exc:
@@ -1360,6 +1346,7 @@ async def repository_consult_endpoint(
         )
         _consume_daily_funnel_slot(_user, http_request, response)
         _consume_antibot_rate_limit_slot(_user, http_request, response)
+        _record_consultation_metric(_user, http_request, endpoint="/repository-consult")
         return RepositoryConsultResponse(
             classified_fuero=base_resp.classified_fuero,
             province_jurisdiction=base_resp.province_jurisdiction,
@@ -1910,11 +1897,12 @@ async def cron_07am_endpoint(
     status_code=status.HTTP_200_OK,
     tags=["Métricas Anónimas"],
 )
-async def register_anonymous_visit_endpoint() -> MetricVisitResponse:
+async def register_anonymous_visit_endpoint(request: Request) -> MetricVisitResponse:
     """Registra una visita anónima sin consultar ni guardar IP, email o identidad."""
     day_key = _current_ar_day_key()
+    visitor_hash = _build_visit_hash_from_request(day_key, request)
     try:
-        db.record_daily_metric_visit(day_key)
+        db.record_daily_metric_visit(day_key, visitor_hash=visitor_hash)
         return MetricVisitResponse(recorded=True, metric_date=day_key)
     except Exception as exc:
         _main_logger.error("Error registrando visita anónima: %s", exc)

@@ -34,6 +34,15 @@ class TestPaso7DailyMetrics(unittest.TestCase):
         today_key = _current_ar_day_key()
         with db._connect() as conn:
             conn.execute("DELETE FROM daily_metrics WHERE metric_date = ?", (today_key,))
+            conn.execute("DELETE FROM daily_metric_visitors WHERE metric_date = ?", (today_key,))
+            conn.execute(
+                "DELETE FROM antibot_rate_limit_events WHERE scope_key LIKE ?",
+                (f"%{self.tag}%",),
+            )
+            conn.execute(
+                "DELETE FROM daily_funnel_counters WHERE scope_key LIKE ?",
+                (f"%{self.tag}%",),
+            )
             scope_keys = [f"acct:{e}" for e in self.created_emails]
             if scope_keys:
                 ph = ",".join("?" for _ in scope_keys)
@@ -80,53 +89,100 @@ class TestPaso7DailyMetrics(unittest.TestCase):
                 temp_db.record_daily_metric_visit("12-11-2026")
 
             d = "2026-11-12"
-            temp_db.record_daily_metric_visit(d)
-            temp_db.record_daily_metric_transition(d, prev_bucket=0, new_bucket=1, ai_query_executed=True)
-            temp_db.record_daily_metric_transition(d, prev_bucket=1, new_bucket=2, ai_query_executed=True)
-            row = temp_db.record_daily_metric_transition(d, prev_bucket=2, new_bucket=3, ai_query_executed=False)
+            # Visita inicial (count == 0) -> visits_without_query += 1
+            v_row = temp_db.record_daily_metric_visit(d, visitor_hash="vis_a")
+            self.assertEqual(v_row["visits_without_query"], 1)
+            # Duplicado de visita mismo día no vuelve a sumar
+            v_dup = temp_db.record_daily_metric_visit(d, visitor_hash="vis_a")
+            self.assertEqual(v_dup["visits_without_query"], 1)
 
-            self.assertEqual(row["visits_without_query"], 0)
-            self.assertEqual(row["users_single_query"], 0)
-            self.assertEqual(row["users_two_queries"], 0)
-            self.assertEqual(row["users_three_plus_queries"], 1)
-            self.assertEqual(row["total_queries_executed"], 2)
+            # 1ª consulta (count == 1): visits_without_query - 1, users_single_query + 1, total + 1
+            r1 = temp_db.record_daily_user_consultation(
+                d, "usr_a", endpoint="/emergency-scan", now_epoch=1000
+            )
+            self.assertEqual(r1["visits_without_query"], 0)
+            self.assertEqual(r1["users_single_query"], 1)
+            self.assertEqual(r1["total_queries_executed"], 1)
+
+            # Coalescencia de consulta unificada (/emergency-scan + /repository-consult en <15s)
+            r1_coalesced = temp_db.record_daily_user_consultation(
+                d, "usr_a", endpoint="/repository-consult", now_epoch=1005
+            )
+            self.assertEqual(r1_coalesced["users_single_query"], 1)
+            self.assertEqual(r1_coalesced["total_queries_executed"], 1)
+
+            # 2ª consulta (count == 2): users_single_query - 1, users_two_queries + 1, total + 1
+            r2 = temp_db.record_daily_user_consultation(
+                d, "usr_a", endpoint="/repository-consult", now_epoch=1100
+            )
+            self.assertEqual(r2["users_single_query"], 0)
+            self.assertEqual(r2["users_two_queries"], 1)
+            self.assertEqual(r2["total_queries_executed"], 2)
+
+            # 3ª consulta (count == 3): users_two_queries - 1, users_three_plus_queries + 1, total + 1
+            r3 = temp_db.record_daily_user_consultation(
+                d, "usr_a", endpoint="/repository-consult", now_epoch=1200
+            )
+            self.assertEqual(r3["users_two_queries"], 0)
+            self.assertEqual(r3["users_three_plus_queries"], 1)
+            self.assertEqual(r3["total_queries_executed"], 3)
+
+            # 4ª consulta (count >= 4): mantiene users_three_plus_queries == 1, total + 1
+            r4 = temp_db.record_daily_user_consultation(
+                d, "usr_a", endpoint="/analyze-expediente", now_epoch=1300
+            )
+            self.assertEqual(r4["users_three_plus_queries"], 1)
+            self.assertEqual(r4["total_queries_executed"], 4)
 
             summary = temp_db.get_daily_metrics_summary(d, days=7)
             self.assertEqual(summary["today"]["metric_date"], d)
             self.assertEqual(len(summary["last_7_days"]), 7)
             self.assertEqual(summary["totals_7_days"]["users_three_plus_queries"], 1)
-            self.assertEqual(summary["totals_7_days"]["total_queries_executed"], 2)
+            self.assertEqual(summary["totals_7_days"]["total_queries_executed"], 4)
 
     def test_admin_metrics_endpoint_permissions_and_anonymous_funnel_flow(self) -> None:
-        """Valida acceso exclusivo ADMIN_EMAILS (403 a no-admin/pagos) y flujo completo anónimo."""
+        """Valida acceso ADMIN_EMAILS y simulación de 2 visitas -> 2 consultas reales en /repository-consult."""
         today_key = _current_ar_day_key()
         with db._connect() as conn:
             conn.execute("DELETE FROM daily_metrics WHERE metric_date = ?", (today_key,))
+            conn.execute("DELETE FROM daily_metric_visitors WHERE metric_date = ?", (today_key,))
 
         # Sin sesión -> 401/403
         unauth_resp = self.client.get("/admin/metrics/daily")
         self.assertIn(unauth_resp.status_code, (401, 403))
 
         # Usuario estándar -> 403
-        std_email = f"std.metrics.{self.tag}@gmail.com"
-        h_std = self._login(std_email, "Estandar")
-        resp_std = self.client.get("/admin/metrics/daily", headers=h_std)
+        u1_email = f"std1.metrics.{self.tag}@gmail.com"
+        u2_email = f"std2.metrics.{self.tag}@gmail.com"
+        h_u1 = {**self._login(u1_email, "Usuario 1"), "X-Device-Fingerprint": f"fp_u1_{self.tag}"}
+        h_u2 = {**self._login(u2_email, "Usuario 2"), "X-Device-Fingerprint": f"fp_u2_{self.tag}"}
+        resp_std = self.client.get("/admin/metrics/daily", headers=h_u1)
         self.assertEqual(resp_std.status_code, 403)
 
         # Usuario pago NO incluido en ADMIN_EMAILS -> 403
         paid_email = f"paid.nonadmin.{self.tag}@gmail.com"
-        h_paid = self._login(paid_email, "Pago No Admin")
+        h_paid = {**self._login(paid_email, "Pago No Admin"), "X-Device-Fingerprint": f"fp_paid_{self.tag}"}
         db.set_user_paid_pass(paid_email, True)
         resp_paid = self.client.get("/admin/metrics/daily", headers=h_paid)
         self.assertEqual(resp_paid.status_code, 403)
 
-        # Visita anónima sin consulta + 1ª consulta + 2ª consulta (social) + 3ª bloqueo comercial
-        visit_resp = self.client.post("/metrics/visit")
-        self.assertEqual(visit_resp.status_code, 200)
-        self.assertTrue(visit_resp.json()["recorded"])
+        admin_email = next(iter(ADMIN_EMAILS))
+        h_admin = self._login(admin_email, "Admin")
 
+        # 1) Simular 2 usuarios que entran a la web sin consultar aún -> visits_without_query == 2
+        v1 = self.client.post("/metrics/visit", headers={"X-Device-Fingerprint": f"fp_u1_{self.tag}"})
+        v2 = self.client.post("/metrics/visit", headers={"X-Device-Fingerprint": f"fp_u2_{self.tag}"})
+        self.assertEqual(v1.status_code, 200)
+        self.assertEqual(v2.status_code, 200)
+
+        pre_metrics = self.client.get("/admin/metrics/daily", headers=h_admin).json()["today"]
+        self.assertEqual(pre_metrics["visits_without_query"], 2)
+        self.assertEqual(pre_metrics["users_single_query"], 0)
+        self.assertEqual(pre_metrics["total_queries_executed"], 0)
+
+        # 2) Ambos usuarios ejecutan 1 consulta real en /repository-consult
         query_payload = {
-            "query": "Consulta anónima de prueba por ruidos molestos de un vecino",
+            "query": "Consulta ciudadana de prueba por ruidos molestos de un vecino lindero",
             "province_jurisdiction": "PJN_NACION_CABA",
             "city_locality": "CABA",
         }
@@ -134,37 +190,60 @@ class TestPaso7DailyMetrics(unittest.TestCase):
             "main._generate_dynamic_llm_legal_answer",
             return_value="Respuesta IA ciudadana completa y verificada conforme normativa vigente.",
         ):
-            q1 = self.client.post("/repository-consult", json=query_payload, headers=h_std)
-            self.assertEqual(q1.status_code, 200)
+            q_u1 = self.client.post("/repository-consult", json=query_payload, headers=h_u1)
+            q_u2 = self.client.post("/repository-consult", json=query_payload, headers=h_u2)
+            self.assertEqual(q_u1.status_code, 200)
+            self.assertEqual(q_u2.status_code, 200)
 
-            unlock_resp = self.client.post("/payments/social-unlock", json={"network": "whatsapp"}, headers=h_std)
-            self.assertEqual(unlock_resp.status_code, 200)
+        post_2_queries = self.client.get("/admin/metrics/daily", headers=h_admin).json()["today"]
+        self.assertEqual(post_2_queries["metric_date"], today_key)
+        self.assertEqual(post_2_queries["visits_without_query"], 0)
+        self.assertEqual(post_2_queries["users_single_query"], 2)
+        self.assertEqual(post_2_queries["users_two_queries"], 0)
+        self.assertEqual(post_2_queries["users_three_plus_queries"], 0)
+        self.assertEqual(post_2_queries["total_queries_executed"], 2)
 
-            q2 = self.client.post("/repository-consult", json=query_payload, headers=h_std)
-            self.assertEqual(q2.status_code, 200)
+        # 3) Usuario 1 desbloquea muro social y realiza su 2ª consulta -> pasa a users_two_queries == 1
+        unlock_u1 = self.client.post("/payments/social-unlock", json={"network": "whatsapp"}, headers=h_u1)
+        self.assertEqual(unlock_u1.status_code, 200)
+        with patch(
+            "main._generate_dynamic_llm_legal_answer",
+            return_value="Respuesta IA ciudadana completa y verificada conforme normativa vigente.",
+        ):
+            q_u1_second = self.client.post("/repository-consult", json=query_payload, headers=h_u1)
+            self.assertEqual(q_u1_second.status_code, 200)
 
-            q3 = self.client.post("/repository-consult", json=query_payload, headers=h_std)
-            self.assertEqual(q3.status_code, 402)
+        after_u1_second = self.client.get("/admin/metrics/daily", headers=h_admin).json()["today"]
+        self.assertEqual(after_u1_second["visits_without_query"], 0)
+        self.assertEqual(after_u1_second["users_single_query"], 1)
+        self.assertEqual(after_u1_second["users_two_queries"], 1)
+        self.assertEqual(after_u1_second["total_queries_executed"], 3)
 
-        # Administrador whitelist en ADMIN_EMAILS -> 200 con resumen de hoy y 7 días
-        admin_email = next(iter(ADMIN_EMAILS))
-        h_admin = self._login(admin_email, "Admin")
-        resp_admin = self.client.get("/admin/metrics/daily", headers=h_admin)
-        self.assertEqual(resp_admin.status_code, 200)
-        body = resp_admin.json()
-        self.assertEqual(body["today"]["metric_date"], today_key)
-        self.assertEqual(body["today"]["visits_without_query"], 0)
-        self.assertEqual(body["today"]["users_three_plus_queries"], 1)
-        self.assertEqual(body["today"]["total_queries_executed"], 2)
-        self.assertEqual(len(body["last_7_days"]), 7)
+        # 4) Admin realiza 3 consultas reales -> suma en users_three_plus_queries == 1 y total == 6
+        with patch(
+            "main._generate_dynamic_llm_legal_answer",
+            return_value="Respuesta IA ciudadana completa y verificada conforme normativa vigente.",
+        ):
+            for _ in range(3):
+                r_adm = self.client.post("/repository-consult", json=query_payload, headers=h_admin)
+                self.assertEqual(r_adm.status_code, 200)
+
+        after_admin_3 = self.client.get("/admin/metrics/daily", headers=h_admin).json()["today"]
+        self.assertEqual(after_admin_3["visits_without_query"], 0)
+        self.assertEqual(after_admin_3["users_single_query"], 1)
+        self.assertEqual(after_admin_3["users_two_queries"], 1)
+        self.assertEqual(after_admin_3["users_three_plus_queries"], 1)
+        self.assertEqual(after_admin_3["total_queries_executed"], 6)
 
     def test_frontend_admin_metrics_panel_markup_and_hooks(self) -> None:
-        """Verifica que el panel colapsable dentro de #admin-toolbar y los hooks JS existan."""
+        """Verifica que el panel colapsable dentro de #admin-toolbar y el scroll móvil existan."""
         html_text = Path("frontend_pwa/index.html").read_text(encoding="utf-8")
         js_text = Path("frontend_pwa/app.js").read_text(encoding="utf-8")
 
         self.assertIn('id="btn-admin-toggle-metrics"', html_text)
         self.assertIn('id="admin-metrics-panel"', html_text)
+        self.assertIn('id="admin-metrics-table-scroll"', html_text)
+        self.assertIn("overflow-x:auto", html_text)
         self.assertIn('id="admin-metrics-7d-body"', html_text)
         self.assertIn("/admin/metrics/daily", js_text)
         self.assertIn("/metrics/visit", js_text)

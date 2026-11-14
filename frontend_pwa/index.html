@@ -621,18 +621,18 @@
           <div id="admin-metrics-empty" class="hidden" style="font-size:0.85rem;color:var(--text-secondary);">
             Todavía no hay actividad registrada en los últimos 7 días.
           </div>
-          <div id="admin-metrics-content" class="hidden" style="display:flex;flex-direction:column;gap:0.75rem;">
+          <div id="admin-metrics-content" class="hidden" style="display:flex;flex-direction:column;gap:0.75rem;width:100%;max-width:100%;">
             <div id="admin-metrics-today-cards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(8.5rem,1fr));gap:0.5rem;"></div>
-            <div style="overflow-x:auto;width:100%;">
-              <table style="width:100%;border-collapse:collapse;font-size:0.82rem;text-align:left;">
+            <div id="admin-metrics-table-scroll" style="overflow-x:auto;-webkit-overflow-scrolling:touch;width:100%;max-width:100%;border:1px solid var(--border-subtle, rgba(148,163,184,0.25));border-radius:0.5rem;">
+              <table id="admin-metrics-7d-table" style="width:100%;min-width:27rem;border-collapse:collapse;font-size:0.74rem;line-height:1.25;text-align:left;white-space:nowrap;">
                 <thead>
                   <tr style="border-bottom:1px solid var(--border-subtle, rgba(148,163,184,0.35));color:var(--text-secondary);">
-                    <th style="padding:0.4rem 0.5rem;">Fecha</th>
-                    <th style="padding:0.4rem 0.5rem;">Visitas s/ consulta</th>
-                    <th style="padding:0.4rem 0.5rem;">1 consulta</th>
-                    <th style="padding:0.4rem 0.5rem;">2 consultas (Social)</th>
-                    <th style="padding:0.4rem 0.5rem;">3+ (Comercial)</th>
-                    <th style="padding:0.4rem 0.5rem;">Total IA</th>
+                    <th style="padding:0.32rem 0.42rem;white-space:nowrap;">Fecha</th>
+                    <th style="padding:0.32rem 0.42rem;white-space:nowrap;">Visitas s/ consulta</th>
+                    <th style="padding:0.32rem 0.42rem;white-space:nowrap;">1 consulta</th>
+                    <th style="padding:0.32rem 0.42rem;white-space:nowrap;">2 consultas (Social)</th>
+                    <th style="padding:0.32rem 0.42rem;white-space:nowrap;">3+ (Comercial)</th>
+                    <th style="padding:0.32rem 0.42rem;white-space:nowrap;">Total IA</th>
                   </tr>
                 </thead>
                 <tbody id="admin-metrics-7d-body"></tbody>

@@ -82,7 +82,7 @@ class TestPaymentSocialAndExternal(unittest.TestCase):
                 os.environ.pop("EXTERNAL_MONTHLY_PAYMENT_URL", None)
 
     def test_social_unlock_all_networks_and_database_persistence(self) -> None:
-        """Verifica que compartir en cualquiera de las redes (WhatsApp, Facebook, Instagram, X) otorgue el pase."""
+        """Verifica que compartir en cualquiera de las redes otorgue el crédito diario de 2ª consulta sin pase permanente."""
         for network in ("whatsapp", "facebook", "instagram", "x", "threads"):
             sub_tag = uuid.uuid4().hex[:6]
             sub_email = f"net_{network}_{sub_tag}@gmail.com"
@@ -90,13 +90,16 @@ class TestPaymentSocialAndExternal(unittest.TestCase):
                 "/auth/google",
                 json={"credential": f"mock_google_oauth:{sub_email}:User {network}"},
             )
-            sub_headers = {"Authorization": f"Bearer {sub_login.json()['access_token']}"}
+            sub_headers = {
+                "Authorization": f"Bearer {sub_login.json()['access_token']}",
+                "X-Device-Fingerprint": f"fp_{network}_{sub_tag}",
+            }
 
             # Antes de compartir, no tiene pase pago
             resp_pre = self.client.get("/auth/me", headers=sub_headers)
             self.assertFalse(resp_pre.json()["has_paid_pass"])
 
-            # Clic en botón de compartir red social
+            # Clic en botón de compartir red social (desbloquea exclusivamente la 2ª consulta del día)
             resp_unlock = self.client.post(
                 "/payments/social-unlock",
                 json={"network": network},
@@ -105,12 +108,15 @@ class TestPaymentSocialAndExternal(unittest.TestCase):
             self.assertEqual(resp_unlock.status_code, 200)
             res_json = resp_unlock.json()
             self.assertEqual(res_json["status"], "UNLOCKED")
-            self.assertTrue(res_json["has_paid_pass"])
+            self.assertFalse(res_json["has_paid_pass"])
             self.assertIn(network.capitalize(), res_json["message"])
 
-            # Después de compartir, tiene pase activo en base de datos
+            # Después de compartir, mantiene has_paid_pass=False y dispone de 1 crédito social diario
             resp_post = self.client.get("/auth/me", headers=sub_headers)
-            self.assertTrue(resp_post.json()["has_paid_pass"])
+            self.assertFalse(resp_post.json()["has_paid_pass"])
+            resp_status = self.client.get("/payments/daily-status", headers=sub_headers)
+            self.assertEqual(resp_status.status_code, 200)
+            self.assertEqual(resp_status.json()["acct_social_credits"], 1)
 
     def test_social_unlock_bypasses_402_on_subsequent_consultations(self) -> None:
         """Verifica que un usuario que agotó su cuota gratuita pueda seguir consultando tras el desbloqueo social."""
@@ -196,20 +202,17 @@ class TestPaymentSocialAndExternal(unittest.TestCase):
         js_text = resp_js.text
         self.assertIn("/payments/social-unlock", js_text)
         self.assertIn("/payments/config", js_text)
-        self.assertIn("/payments/checkout", js_text)
         self.assertIn("unlockDeliverablesBySocialShare", js_text)
         self.assertIn("social_share_unlocked = true", js_text)
         self.assertIn(
-            '"https://api.whatsapp.com/send?text=" + encodeURIComponent(shareText + " " + shareUrl)',
+            '"https://api.whatsapp.com/send?text=" + encodeURIComponent(shareText)',
             js_text,
         )
         self.assertIn(
-            "¡Texto copiado! Pegalo en tu Historia o publicación de Instagram",
+            "¡Texto copiado! Pegalo en tu Historia o publicación",
             js_text,
         )
         self.assertIn('window.open("https://www.instagram.com/", "_blank")', js_text)
-        self.assertIn("Redirigiendo al pago...", js_text)
-        self.assertNotIn("network.capitalize()", js_text)
         self.assertIn("initPrimerosPasosModal", js_text)
         self.assertIn("instagram", js_text)
         self.assertNotIn("mercadopago", js_text.lower())
@@ -217,7 +220,7 @@ class TestPaymentSocialAndExternal(unittest.TestCase):
 
     def test_social_buttons_and_commercial_checkout_hide_paywall_and_unlock_deliverables(self) -> None:
         """Verifica que el clic en cualquiera de los botones sociales o el checkout comercial
-        oculta el muro de pago y desbloquea los entregables del informe."""
+        redirecciona a Lemon Squeezy sin auto-otorgar pase local."""
         resp_js = self.client.get("/app.js")
         self.assertEqual(resp_js.status_code, 200)
         js_text = resp_js.text
@@ -241,7 +244,7 @@ class TestPaymentSocialAndExternal(unittest.TestCase):
         self.assertIn('unlockedDetails.classList.remove("hidden")', js_text)
         self.assertIn('unlockedDetails.style.display = "flex"', js_text)
 
-        # 3. Verificar que POST /payments/checkout funciona para ambos planes ($4.000 ARS micro y $20.000 ARS monthly)
+        # 3. Verificar que POST /payments/checkout redirige en modo LIVE a Lemon Squeezy sin auto-otorgar has_paid_pass
         for plan_type, expected_amount in (("micro", "4000.00"), ("monthly", "20000.00")):
             chk_tag = uuid.uuid4().hex[:6]
             chk_email = f"checkout_{plan_type}_{chk_tag}@gmail.com"
@@ -260,11 +263,10 @@ class TestPaymentSocialAndExternal(unittest.TestCase):
             chk_data = resp_chk.json()
             self.assertEqual(chk_data["plan_type"], plan_type)
             self.assertEqual(chk_data["amount_ars"], expected_amount)
-            self.assertTrue(chk_data["has_paid_pass"])
-
-            # Confirmar que el usuario quedó con pase desbloqueado y puede descargar PDF
-            resp_me = self.client.get("/auth/me", headers=chk_headers)
-            self.assertTrue(resp_me.json()["has_paid_pass"])
+            self.assertEqual(chk_data["status"], "REDIRECT")
+            self.assertEqual(chk_data["mode"], "LIVE")
+            self.assertFalse(chk_data["has_paid_pass"])
+            self.assertIn("lemonsqueezy.com/checkout/buy/", chk_data["checkout_url"])
 
 
 if __name__ == "__main__":

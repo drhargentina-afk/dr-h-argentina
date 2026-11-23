@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -33,7 +34,7 @@ from fastapi.openapi.utils import get_openapi
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from auditor_revision.report_builder import CitizenReportBuilder
 from core.admin_auth import (
@@ -54,6 +55,7 @@ from core.auth_oauth import (
 from core.case_tracker import CaseTrackerService
 from core.config import ADMIN_EMAILS, ApiKeyLeakGuardMiddleware, is_whitelisted_admin_email
 from core.database import DrHDatabase
+from core.metrics_sync import metrics_sync_manager
 from core.models import (
     BoletinOficialNormInput,
     EmergencyScanRequest,
@@ -109,7 +111,23 @@ _main_logger.info(
     _startup_reset_stats.get("users_reset", 0),
     _startup_reset_stats.get("sessions_reset", 0),
 )
+_initial_metrics_restore = metrics_sync_manager.restore_on_startup(db)
 google_auth = GoogleOAuthManager(orchestrator.security_config, db)
+
+
+@app.on_event("startup")
+async def _restore_external_metrics_on_startup() -> None:
+    """Restaura automáticamente metrics_snapshot.json hacia drh_production.db al iniciar FastAPI."""
+    try:
+        stats = metrics_sync_manager.restore_on_startup(db)
+        if stats.get("daily_metrics_restored", 0) > 0:
+            _main_logger.info(
+                "Métricas restauradas desde snapshot externo (días=%s, visitantes=%s).",
+                stats.get("daily_metrics_restored", 0),
+                stats.get("visitors_restored", 0),
+            )
+    except Exception as exc:
+        _main_logger.warning("Aviso en restauración inicial de métricas: %s", exc)
 
 _AR_TIMEZONE = timezone(timedelta(hours=-3))
 ANTIBOT_RATE_LIMIT_MAX_PER_HOUR: int = 2
@@ -157,31 +175,43 @@ class DailyStatusResponse(BaseModel):
 
 
 class DailyMetricRow(BaseModel):
-    """Fila diaria anónima de métricas de uso (sin datos personales)."""
+    """Fila diaria anónima de métricas de uso y conversión (sin datos personales)."""
 
     metric_date: str
-    visits_without_query: int
-    users_single_query: int
-    users_two_queries: int
-    users_three_plus_queries: int
-    total_queries_executed: int
+    visits_without_query: int = 0
+    users_single_query: int = 0
+    users_two_queries: int = 0
+    users_three_plus_queries: int = 0
+    total_queries_executed: int = 0
+    social_shares: int = 0
+    payment_clicks_micro: int = 0
+    payment_clicks_monthly: int = 0
+    payments_confirmed: int = 0
     updated_at_iso: str = ""
 
 
 class DailyMetricsTotals(BaseModel):
-    """Sumatoria agregada de métricas anónimas de los últimos 7 días."""
+    """Sumatoria agregada de métricas anónimas (histórica o por ventana de días)."""
 
-    visits_without_query: int
-    users_single_query: int
-    users_two_queries: int
-    users_three_plus_queries: int
-    total_queries_executed: int
+    visits_without_query: int = 0
+    users_single_query: int = 0
+    users_two_queries: int = 0
+    users_three_plus_queries: int = 0
+    total_queries_executed: int = 0
+    social_shares: int = 0
+    payment_clicks_micro: int = 0
+    payment_clicks_monthly: int = 0
+    payments_confirmed: int = 0
 
 
 class DailyMetricsAdminResponse(BaseModel):
-    """Resumen de métricas anónimas de hoy y los últimos 7 días para ADMIN_EMAILS."""
+    """Resumen de métricas anónimas: Total Histórico Acumulado y últimos 30 días para ADMIN_EMAILS."""
 
     today: DailyMetricRow
+    all_time_totals: DailyMetricsTotals
+    daily: list[DailyMetricRow]
+    last_30_days: list[DailyMetricRow]
+    totals_30_days: DailyMetricsTotals
     last_7_days: list[DailyMetricRow]
     totals_7_days: DailyMetricsTotals
 
@@ -191,6 +221,45 @@ class MetricVisitResponse(BaseModel):
 
     recorded: bool
     metric_date: str
+
+
+AllowedMetricEventType = Literal["social_share", "payment_click_micro", "payment_click_monthly"]
+
+
+class MetricEventRequest(BaseModel):
+    """Evento anónimo de conversión permitido por lista blanca estricta."""
+
+    model_config = ConfigDict(extra="forbid")
+    event_type: AllowedMetricEventType = Field(
+        ...,
+        description="Evento permitido: 'social_share', 'payment_click_micro' o 'payment_click_monthly'.",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_event_alias(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "event" in data and "event_type" not in data:
+            copied = dict(data)
+            copied["event_type"] = copied.pop("event")
+            return copied
+        return data
+
+
+class MetricEventResponse(BaseModel):
+    """Confirmación liviana de evento de conversión registrado en daily_metrics."""
+
+    recorded: bool
+    metric_date: str
+    event_type: AllowedMetricEventType
+
+
+class LemonSqueezyWebhookResponse(BaseModel):
+    """Confirmación de procesamiento del webhook de pagos Lemon Squeezy."""
+
+    received: bool
+    metric_date: str
+    payment_confirmed: bool
+    event_name: str = ""
 
 
 def _require_strict_admin_user(user: UserProfileResponse) -> UserProfileResponse:
@@ -239,6 +308,7 @@ def _record_consultation_metric(
             visitor_hash,
             endpoint=endpoint,
         )
+        metrics_sync_manager.trigger_background_backup(db)
     except Exception as exc:
         _main_logger.error("Error actualizando daily_metrics en %s: %s", endpoint, exc)
 
@@ -1903,6 +1973,7 @@ async def register_anonymous_visit_endpoint(request: Request) -> MetricVisitResp
     visitor_hash = _build_visit_hash_from_request(day_key, request)
     try:
         db.record_daily_metric_visit(day_key, visitor_hash=visitor_hash)
+        metrics_sync_manager.trigger_background_backup(db)
         return MetricVisitResponse(recorded=True, metric_date=day_key)
     except Exception as exc:
         _main_logger.error("Error registrando visita anónima: %s", exc)
@@ -1910,6 +1981,152 @@ async def register_anonymous_visit_endpoint(request: Request) -> MetricVisitResp
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Error registrando la métrica anónima diaria.",
         ) from exc
+
+
+@app.post(
+    "/api/metrics/event",
+    response_model=MetricEventResponse,
+    status_code=status.HTTP_200_OK,
+    tags=["Métricas Anónimas"],
+)
+@app.post(
+    "/metrics/event",
+    response_model=MetricEventResponse,
+    status_code=status.HTTP_200_OK,
+    include_in_schema=False,
+)
+async def register_anonymous_metric_event_endpoint(req: MetricEventRequest) -> MetricEventResponse:
+    """Registra eventos de conversión anónimos (social_share, payment_click_micro, payment_click_monthly)."""
+    day_key = _current_ar_day_key()
+    try:
+        if req.event_type == "social_share":
+            db.record_daily_social_share(day_key)
+        elif req.event_type == "payment_click_micro":
+            db.record_daily_payment_click(day_key, "micro")
+        elif req.event_type == "payment_click_monthly":
+            db.record_daily_payment_click(day_key, "monthly")
+        metrics_sync_manager.trigger_background_backup(db)
+        return MetricEventResponse(
+            recorded=True,
+            metric_date=day_key,
+            event_type=req.event_type,
+        )
+    except Exception as exc:
+        _main_logger.error("Error registrando evento de métrica (%s): %s", req.event_type, exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error registrando el evento de conversión diario.",
+        ) from exc
+
+
+@app.post(
+    "/webhooks/lemonsqueezy",
+    response_model=LemonSqueezyWebhookResponse,
+    status_code=status.HTTP_200_OK,
+    tags=["Monetización Dual"],
+)
+@app.post(
+    "/api/webhooks/lemonsqueezy",
+    response_model=LemonSqueezyWebhookResponse,
+    status_code=status.HTTP_200_OK,
+    include_in_schema=False,
+)
+@app.post(
+    "/payments/webhook",
+    response_model=LemonSqueezyWebhookResponse,
+    status_code=status.HTTP_200_OK,
+    include_in_schema=False,
+)
+async def lemonsqueezy_webhook_endpoint(request: Request) -> LemonSqueezyWebhookResponse:
+    """Recibe notificaciones de pago acreditado de Lemon Squeezy, actualiza payments_confirmed y activa el pase."""
+    raw_body = await request.body()
+    webhook_secret = (
+        os.environ.get("LEMON_SQUEEZY_WEBHOOK_SECRET")
+        or os.environ.get("LEMONSQUEEZY_WEBHOOK_SECRET")
+        or ""
+    ).strip()
+
+    if webhook_secret:
+        sig_header = str(request.headers.get("x-signature") or "").strip()
+        expected_sig = hmac.new(
+            webhook_secret.encode("utf-8"),
+            raw_body,
+            hashlib.sha256,
+        ).hexdigest()
+        if not sig_header or not hmac.compare_digest(expected_sig, sig_header):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Firma X-Signature del webhook de Lemon Squeezy inválida.",
+            )
+
+    try:
+        payload: dict[str, Any] = json.loads(raw_body.decode("utf-8")) if raw_body else {}
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cuerpo JSON del webhook inválido.",
+        ) from exc
+
+    meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    attrs = data.get("attributes") if isinstance(data.get("attributes"), dict) else {}
+    custom_data = meta.get("custom_data") if isinstance(meta.get("custom_data"), dict) else {}
+
+    event_name = str(
+        meta.get("event_name")
+        or payload.get("event_name")
+        or payload.get("event")
+        or "order_created"
+    ).strip().lower()
+
+    ignored_events = {
+        "order_refunded",
+        "subscription_payment_failed",
+        "subscription_Payment_refunded".lower(),
+        "subscription_cancelled",
+        "subscription_expired",
+    }
+    attr_status = str(attrs.get("status") or payload.get("status") or "paid").strip().lower()
+    is_paid_event = event_name not in ignored_events and attr_status not in {"refunded", "failed", "void"}
+
+    day_key = _current_ar_day_key()
+    if is_paid_event:
+        db.record_daily_payment_confirmed(day_key)
+
+        user_email = str(
+            custom_data.get("user_email")
+            or custom_data.get("email")
+            or attrs.get("user_email")
+            or payload.get("user_email")
+            or ""
+        ).strip().lower()
+        order_id = str(
+            data.get("id")
+            or payload.get("payment_id")
+            or payload.get("order_id")
+            or f"ls_{hashlib.sha256(raw_body or b'ls').hexdigest()[:12]}"
+        ).strip()
+        if user_email:
+            try:
+                db.apply_approved_payment(
+                    payment_id=order_id,
+                    user_email=user_email,
+                    plan_type="PASE_COMPLETO",
+                    amount_ars=str(attrs.get("total_formatted") or attrs.get("total") or "20000.00"),
+                    currency_id=str(attrs.get("currency") or "ARS"),
+                )
+                db.set_user_paid_pass(user_email, True)
+            except Exception as exc:
+                _main_logger.warning("Aviso acreditando usuario %s en webhook Lemon Squeezy: %s", user_email, exc)
+
+        metrics_sync_manager.trigger_background_backup(db)
+
+    return LemonSqueezyWebhookResponse(
+        received=True,
+        metric_date=day_key,
+        payment_confirmed=is_paid_event,
+        event_name=event_name,
+    )
 
 
 @app.get(
@@ -1921,14 +2138,20 @@ async def register_anonymous_visit_endpoint(request: Request) -> MetricVisitResp
 async def get_admin_daily_metrics_endpoint(
     user: Annotated[UserProfileResponse, Depends(get_current_user)],
 ) -> DailyMetricsAdminResponse:
-    """Devuelve resumen de métricas anónimas de hoy y los últimos 7 días solo para ADMIN_EMAILS."""
+    """Devuelve resumen de métricas anónimas: Total Histórico Acumulado y últimos 30 días solo para ADMIN_EMAILS."""
     _require_strict_admin_user(user)
     day_key = _current_ar_day_key()
     try:
-        summary = db.get_daily_metrics_summary(day_key, days=7)
+        summary = db.get_daily_metrics_summary(day_key, days=30)
+        daily_rows = [DailyMetricRow(**row) for row in summary["daily"]]
+        last_7_rows = [DailyMetricRow(**row) for row in summary["last_7_days"]]
         return DailyMetricsAdminResponse(
             today=DailyMetricRow(**summary["today"]),
-            last_7_days=[DailyMetricRow(**row) for row in summary["last_7_days"]],
+            all_time_totals=DailyMetricsTotals(**summary["all_time_totals"]),
+            daily=daily_rows,
+            last_30_days=daily_rows,
+            totals_30_days=DailyMetricsTotals(**summary["totals_30_days"]),
+            last_7_days=last_7_rows,
             totals_7_days=DailyMetricsTotals(**summary["totals_7_days"]),
         )
     except Exception as exc:

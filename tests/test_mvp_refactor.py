@@ -265,6 +265,7 @@ class TestMvpRefactorRoadmap(unittest.TestCase):
         self.assertFalse(resp_me.json()["has_paid_pass"])
 
         # 3. Pago Social: el usuario comparte en una red social (WhatsApp, X, Facebook, Threads)
+        # Otorga crédito exclusivamente para la 2ª consulta del día sin dar pase permanente (has_paid_pass=False)
         resp_unlock = self.client.post(
             "/payments/social-unlock",
             json={"network": "whatsapp"},
@@ -273,11 +274,14 @@ class TestMvpRefactorRoadmap(unittest.TestCase):
         self.assertEqual(resp_unlock.status_code, 200)
         unlock_data = resp_unlock.json()
         self.assertEqual(unlock_data["status"], "UNLOCKED")
-        self.assertTrue(unlock_data["has_paid_pass"])
+        self.assertFalse(unlock_data["has_paid_pass"])
 
-        # 4. Ahora el perfil muestra has_paid_pass=True y can_consult_free=False (desbloqueado con pase)
+        # 4. El perfil conserva has_paid_pass=False y el estado diario refleja el crédito social otorgado
         resp_me_after = self.client.get("/auth/me", headers=headers)
-        self.assertTrue(resp_me_after.json()["has_paid_pass"])
+        self.assertFalse(resp_me_after.json()["has_paid_pass"])
+        resp_daily = self.client.get("/payments/daily-status", headers=headers)
+        self.assertEqual(resp_daily.status_code, 200)
+        self.assertEqual(resp_daily.json()["acct_social_credits"], 1)
 
     def test_strict_admin_whitelist_and_common_user_paywall_lock(self) -> None:
         """Verifica que SOLO dr.h.argentina@gmail.com y mendezdamian081@gmail.com entren bonificados,

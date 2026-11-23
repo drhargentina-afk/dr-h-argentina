@@ -118,6 +118,10 @@ class DrHDatabase:
                     users_two_queries INTEGER NOT NULL DEFAULT 0,
                     users_three_plus_queries INTEGER NOT NULL DEFAULT 0,
                     total_queries_executed INTEGER NOT NULL DEFAULT 0,
+                    social_shares INTEGER NOT NULL DEFAULT 0,
+                    payment_clicks_micro INTEGER NOT NULL DEFAULT 0,
+                    payment_clicks_monthly INTEGER NOT NULL DEFAULT 0,
+                    payments_confirmed INTEGER NOT NULL DEFAULT 0,
                     updated_at_iso TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_daily_metrics_date ON daily_metrics(metric_date);
@@ -138,6 +142,20 @@ class DrHDatabase:
             cols = [r["name"] for r in conn.execute("PRAGMA table_info(users);").fetchall()]
             if "is_admin" not in cols:
                 conn.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0;")
+
+            # Migración segura de columnas de conversión en daily_metrics si no existen
+            metric_cols = {r["name"] for r in conn.execute("PRAGMA table_info(daily_metrics);").fetchall()}
+            for extra_metric_col in (
+                "social_shares",
+                "payment_clicks_micro",
+                "payment_clicks_monthly",
+                "payments_confirmed",
+            ):
+                if extra_metric_col not in metric_cols:
+                    conn.execute(
+                        f"ALTER TABLE daily_metrics ADD COLUMN {extra_metric_col} INTEGER NOT NULL DEFAULT 0;"
+                    )
+            conn.commit()
 
         from core.config import ADMIN_EMAILS
 
@@ -603,11 +621,31 @@ class DrHDatabase:
             """
             INSERT OR IGNORE INTO daily_metrics (
                 metric_date, visits_without_query, users_single_query,
-                users_two_queries, users_three_plus_queries, total_queries_executed, updated_at_iso
-            ) VALUES (?, 0, 0, 0, 0, 0, ?)
+                users_two_queries, users_three_plus_queries, total_queries_executed,
+                social_shares, payment_clicks_micro, payment_clicks_monthly,
+                payments_confirmed, updated_at_iso
+            ) VALUES (?, 0, 0, 0, 0, 0, 0, 0, 0, 0, ?)
             """,
             (clean_date, now_iso),
         )
+
+    @staticmethod
+    def _normalize_metric_row(day_str: str, item: dict[str, Any] | sqlite3.Row | None) -> dict[str, Any]:
+        """Normaliza una fila de daily_metrics garantizando enteros >= 0 en las 9 métricas."""
+        raw = dict(item) if item is not None else {}
+        return {
+            "metric_date": day_str,
+            "visits_without_query": max(0, int(raw.get("visits_without_query") or 0)),
+            "users_single_query": max(0, int(raw.get("users_single_query") or 0)),
+            "users_two_queries": max(0, int(raw.get("users_two_queries") or 0)),
+            "users_three_plus_queries": max(0, int(raw.get("users_three_plus_queries") or 0)),
+            "total_queries_executed": max(0, int(raw.get("total_queries_executed") or 0)),
+            "social_shares": max(0, int(raw.get("social_shares") or 0)),
+            "payment_clicks_micro": max(0, int(raw.get("payment_clicks_micro") or 0)),
+            "payment_clicks_monthly": max(0, int(raw.get("payment_clicks_monthly") or 0)),
+            "payments_confirmed": max(0, int(raw.get("payments_confirmed") or 0)),
+            "updated_at_iso": str(raw.get("updated_at_iso") or ""),
+        }
 
     def record_daily_metric_visit(
         self,
@@ -659,7 +697,7 @@ class DrHDatabase:
                 "SELECT * FROM daily_metrics WHERE metric_date = ?",
                 (clean_date,),
             ).fetchone()
-            return dict(row)
+            return self._normalize_metric_row(clean_date, row)
 
     def record_daily_user_consultation(
         self,
@@ -716,7 +754,7 @@ class DrHDatabase:
                         "SELECT * FROM daily_metrics WHERE metric_date = ?",
                         (clean_date,),
                     ).fetchone()
-                    return dict(row)
+                    return self._normalize_metric_row(clean_date, row)
 
                 new_count = prev_count + 1
                 conn.execute(
@@ -791,7 +829,82 @@ class DrHDatabase:
                 "SELECT * FROM daily_metrics WHERE metric_date = ?",
                 (clean_date,),
             ).fetchone()
-            return dict(row)
+            return self._normalize_metric_row(clean_date, row)
+
+    def record_daily_social_share(self, metric_date: str) -> dict[str, Any]:
+        """Incrementa social_shares (usuarios que completaron el desbloqueo del muro social de 12s)."""
+        clean_date = self._validate_metric_date(metric_date)
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with self._connect() as conn:
+            self._ensure_daily_metric_row(conn, clean_date, now_iso)
+            conn.execute(
+                """
+                UPDATE daily_metrics
+                SET social_shares = social_shares + 1,
+                    updated_at_iso = ?
+                WHERE metric_date = ?
+                """,
+                (now_iso, clean_date),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM daily_metrics WHERE metric_date = ?",
+                (clean_date,),
+            ).fetchone()
+            return self._normalize_metric_row(clean_date, row)
+
+    def record_daily_payment_click(self, metric_date: str, plan_type: str) -> dict[str, Any]:
+        """Incrementa payment_clicks_micro ($4.000 ARS) o payment_clicks_monthly ($20.000 ARS)."""
+        clean_date = self._validate_metric_date(metric_date)
+        clean_plan = str(plan_type or "").strip().lower()
+        if clean_plan in ("micro", "payment_click_micro"):
+            column_name = "payment_clicks_micro"
+        elif clean_plan in ("monthly", "payment_click_monthly"):
+            column_name = "payment_clicks_monthly"
+        else:
+            raise ValueError("plan_type inválido: debe ser 'micro' o 'monthly'.")
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with self._connect() as conn:
+            self._ensure_daily_metric_row(conn, clean_date, now_iso)
+            conn.execute(
+                f"""
+                UPDATE daily_metrics
+                SET {column_name} = {column_name} + 1,
+                    updated_at_iso = ?
+                WHERE metric_date = ?
+                """,
+                (now_iso, clean_date),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM daily_metrics WHERE metric_date = ?",
+                (clean_date,),
+            ).fetchone()
+            return self._normalize_metric_row(clean_date, row)
+
+    def record_daily_payment_confirmed(self, metric_date: str, count: int = 1) -> dict[str, Any]:
+        """Incrementa payments_confirmed cuando se acredita un pago en el webhook de Lemon Squeezy."""
+        clean_date = self._validate_metric_date(metric_date)
+        safe_delta = max(1, int(count))
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with self._connect() as conn:
+            self._ensure_daily_metric_row(conn, clean_date, now_iso)
+            conn.execute(
+                """
+                UPDATE daily_metrics
+                SET payments_confirmed = payments_confirmed + ?,
+                    updated_at_iso = ?
+                WHERE metric_date = ?
+                """,
+                (safe_delta, now_iso, clean_date),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM daily_metrics WHERE metric_date = ?",
+                (clean_date,),
+            ).fetchone()
+            return self._normalize_metric_row(clean_date, row)
 
     def record_daily_metric_transition(
         self,
@@ -856,21 +969,277 @@ class DrHDatabase:
                 "SELECT * FROM daily_metrics WHERE metric_date = ?",
                 (clean_date,),
             ).fetchone()
-            return dict(row)
+            return self._normalize_metric_row(clean_date, row)
 
-    def get_daily_metrics_summary(self, reference_date: str, days: int = 7) -> dict[str, Any]:
-        """Devuelve el resumen anónimo del día y de los últimos N días calendario (default 7)."""
+    def export_metrics_snapshot(self) -> dict[str, Any]:
+        """Exporta un snapshot JSON consolidado 100% libre de PII de daily_metrics y daily_metric_visitors."""
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with self._connect() as conn:
+            metric_rows = conn.execute(
+                """
+                SELECT metric_date, visits_without_query, users_single_query,
+                       users_two_queries, users_three_plus_queries,
+                       total_queries_executed, social_shares,
+                       payment_clicks_micro, payment_clicks_monthly,
+                       payments_confirmed, updated_at_iso
+                FROM daily_metrics
+                ORDER BY metric_date ASC
+                """
+            ).fetchall()
+            visitor_rows = conn.execute(
+                """
+                SELECT metric_date, visitor_hash, queries_count, visit_counted,
+                       last_endpoint, last_query_epoch, updated_at_iso
+                FROM daily_metric_visitors
+                ORDER BY metric_date ASC, visitor_hash ASC
+                """
+            ).fetchall()
+
+        return {
+            "schema_version": 2,
+            "exported_at_iso": now_iso,
+            "daily_metrics": [self._normalize_metric_row(str(r["metric_date"]), r) for r in metric_rows],
+            "daily_metric_visitors": [
+                {
+                    "metric_date": str(v["metric_date"]),
+                    "visitor_hash": str(v["visitor_hash"]),
+                    "queries_count": max(0, int(v["queries_count"] or 0)),
+                    "visit_counted": max(0, int(v["visit_counted"] or 0)),
+                    "last_endpoint": str(v["last_endpoint"] or ""),
+                    "last_query_epoch": max(0, int(v["last_query_epoch"] or 0)),
+                    "updated_at_iso": str(v["updated_at_iso"] or ""),
+                }
+                for v in visitor_rows
+            ],
+        }
+
+    def restore_metrics_snapshot(self, snapshot: dict[str, Any]) -> dict[str, int]:
+        """Restaura y fusiona un snapshot externo sin pisar datos locales más recientes."""
+        if not isinstance(snapshot, dict):
+            return {"daily_metrics_restored": 0, "visitors_restored": 0}
+
+        raw_metrics = snapshot.get("daily_metrics")
+        raw_visitors = snapshot.get("daily_metric_visitors")
+        metrics_list = raw_metrics if isinstance(raw_metrics, list) else []
+        visitors_list = raw_visitors if isinstance(raw_visitors, list) else []
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        restored_days = 0
+        restored_visitors = 0
+
+        with self._connect() as conn:
+            for item in metrics_list:
+                if not isinstance(item, dict):
+                    continue
+                raw_date = str(item.get("metric_date") or "").strip()
+                try:
+                    clean_date = self._validate_metric_date(raw_date)
+                except ValueError:
+                    continue
+
+                inc = self._normalize_metric_row(clean_date, item)
+                inc_updated = inc["updated_at_iso"] or now_iso
+                existing_row = conn.execute(
+                    "SELECT * FROM daily_metrics WHERE metric_date = ?",
+                    (clean_date,),
+                ).fetchone()
+
+                if existing_row is None:
+                    conn.execute(
+                        """
+                        INSERT INTO daily_metrics (
+                            metric_date, visits_without_query, users_single_query,
+                            users_two_queries, users_three_plus_queries,
+                            total_queries_executed, social_shares,
+                            payment_clicks_micro, payment_clicks_monthly,
+                            payments_confirmed, updated_at_iso
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            clean_date,
+                            inc["visits_without_query"],
+                            inc["users_single_query"],
+                            inc["users_two_queries"],
+                            inc["users_three_plus_queries"],
+                            inc["total_queries_executed"],
+                            inc["social_shares"],
+                            inc["payment_clicks_micro"],
+                            inc["payment_clicks_monthly"],
+                            inc["payments_confirmed"],
+                            inc_updated,
+                        ),
+                    )
+                    restored_days += 1
+                else:
+                    loc = self._normalize_metric_row(clean_date, existing_row)
+                    loc_total_activity = (
+                        loc["visits_without_query"]
+                        + loc["users_single_query"]
+                        + loc["users_two_queries"]
+                        + loc["users_three_plus_queries"]
+                        + loc["total_queries_executed"]
+                    )
+                    inc_total_activity = (
+                        inc["visits_without_query"]
+                        + inc["users_single_query"]
+                        + inc["users_two_queries"]
+                        + inc["users_three_plus_queries"]
+                        + inc["total_queries_executed"]
+                    )
+                    # Si el snapshot remoto tiene mayor cantidad de consultas o la DB local está recién creada (0),
+                    # adoptamos la distribución de embudo del snapshot; si la DB local ya avanzó más, preservamos la local.
+                    use_incoming_funnel = (
+                        loc_total_activity == 0
+                        or inc["total_queries_executed"] > loc["total_queries_executed"]
+                        or (
+                            inc["total_queries_executed"] == loc["total_queries_executed"]
+                            and inc_total_activity > loc_total_activity
+                        )
+                    )
+                    merged_visits = inc["visits_without_query"] if use_incoming_funnel else loc["visits_without_query"]
+                    merged_single = inc["users_single_query"] if use_incoming_funnel else loc["users_single_query"]
+                    merged_two = inc["users_two_queries"] if use_incoming_funnel else loc["users_two_queries"]
+                    merged_three = (
+                        inc["users_three_plus_queries"] if use_incoming_funnel else loc["users_three_plus_queries"]
+                    )
+                    merged_total_q = max(loc["total_queries_executed"], inc["total_queries_executed"])
+                    merged_shares = max(loc["social_shares"], inc["social_shares"])
+                    merged_micro = max(loc["payment_clicks_micro"], inc["payment_clicks_micro"])
+                    merged_monthly = max(loc["payment_clicks_monthly"], inc["payment_clicks_monthly"])
+                    merged_paid = max(loc["payments_confirmed"], inc["payments_confirmed"])
+                    merged_updated = max(loc["updated_at_iso"], inc_updated)
+
+                    conn.execute(
+                        """
+                        UPDATE daily_metrics
+                        SET visits_without_query = ?,
+                            users_single_query = ?,
+                            users_two_queries = ?,
+                            users_three_plus_queries = ?,
+                            total_queries_executed = ?,
+                            social_shares = ?,
+                            payment_clicks_micro = ?,
+                            payment_clicks_monthly = ?,
+                            payments_confirmed = ?,
+                            updated_at_iso = ?
+                        WHERE metric_date = ?
+                        """,
+                        (
+                            merged_visits,
+                            merged_single,
+                            merged_two,
+                            merged_three,
+                            merged_total_q,
+                            merged_shares,
+                            merged_micro,
+                            merged_monthly,
+                            merged_paid,
+                            merged_updated,
+                            clean_date,
+                        ),
+                    )
+                    restored_days += 1
+
+            for v_item in visitors_list:
+                if not isinstance(v_item, dict):
+                    continue
+                raw_date = str(v_item.get("metric_date") or "").strip()
+                clean_hash = str(v_item.get("visitor_hash") or "").strip()
+                if not clean_hash:
+                    continue
+                try:
+                    clean_date = self._validate_metric_date(raw_date)
+                except ValueError:
+                    continue
+
+                inc_q = max(0, int(v_item.get("queries_count") or 0))
+                inc_vc = max(0, int(v_item.get("visit_counted") or 0))
+                inc_ep = str(v_item.get("last_endpoint") or "")
+                inc_epoch = max(0, int(v_item.get("last_query_epoch") or 0))
+                inc_up = str(v_item.get("updated_at_iso") or now_iso)
+
+                existing_v = conn.execute(
+                    """
+                    SELECT queries_count, visit_counted, last_endpoint, last_query_epoch, updated_at_iso
+                    FROM daily_metric_visitors
+                    WHERE metric_date = ? AND visitor_hash = ?
+                    """,
+                    (clean_date, clean_hash),
+                ).fetchone()
+
+                if existing_v is None:
+                    conn.execute(
+                        """
+                        INSERT INTO daily_metric_visitors (
+                            metric_date, visitor_hash, queries_count, visit_counted,
+                            last_endpoint, last_query_epoch, updated_at_iso
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (clean_date, clean_hash, inc_q, inc_vc, inc_ep, inc_epoch, inc_up),
+                    )
+                else:
+                    loc_q = max(0, int(existing_v["queries_count"] or 0))
+                    loc_vc = max(0, int(existing_v["visit_counted"] or 0))
+                    loc_ep = str(existing_v["last_endpoint"] or "")
+                    loc_epoch = max(0, int(existing_v["last_query_epoch"] or 0))
+                    loc_up = str(existing_v["updated_at_iso"] or "")
+                    best_ep = inc_ep if inc_epoch >= loc_epoch and inc_ep else loc_ep
+                    conn.execute(
+                        """
+                        UPDATE daily_metric_visitors
+                        SET queries_count = ?,
+                            visit_counted = ?,
+                            last_endpoint = ?,
+                            last_query_epoch = ?,
+                            updated_at_iso = ?
+                        WHERE metric_date = ? AND visitor_hash = ?
+                        """,
+                        (
+                            max(loc_q, inc_q),
+                            max(loc_vc, inc_vc),
+                            best_ep,
+                            max(loc_epoch, inc_epoch),
+                            max(loc_up, inc_up),
+                            clean_date,
+                            clean_hash,
+                        ),
+                    )
+                restored_visitors += 1
+
+            conn.commit()
+
+        return {
+            "daily_metrics_restored": restored_days,
+            "visitors_restored": restored_visitors,
+        }
+
+    def get_daily_metrics_summary(self, reference_date: str, days: int = 30) -> dict[str, Any]:
+        """Devuelve el resumen histórico acumulado (all_time_totals) y la serie diaria (default 30 días)."""
         clean_ref = self._validate_metric_date(reference_date)
         safe_days = max(1, min(90, int(days)))
         end_d = date.fromisoformat(clean_ref)
         start_d = end_d - timedelta(days=safe_days - 1)
+
+        metric_keys = (
+            "visits_without_query",
+            "users_single_query",
+            "users_two_queries",
+            "users_three_plus_queries",
+            "total_queries_executed",
+            "social_shares",
+            "payment_clicks_micro",
+            "payment_clicks_monthly",
+            "payments_confirmed",
+        )
 
         with self._connect() as conn:
             rows = conn.execute(
                 """
                 SELECT metric_date, visits_without_query, users_single_query,
                        users_two_queries, users_three_plus_queries,
-                       total_queries_executed, updated_at_iso
+                       total_queries_executed, social_shares,
+                       payment_clicks_micro, payment_clicks_monthly,
+                       payments_confirmed, updated_at_iso
                 FROM daily_metrics
                 WHERE metric_date BETWEEN ? AND ?
                 ORDER BY metric_date DESC
@@ -878,45 +1247,46 @@ class DrHDatabase:
                 (start_d.isoformat(), end_d.isoformat()),
             ).fetchall()
 
+            all_time_row = conn.execute(
+                """
+                SELECT
+                    COALESCE(SUM(visits_without_query), 0) AS visits_without_query,
+                    COALESCE(SUM(users_single_query), 0) AS users_single_query,
+                    COALESCE(SUM(users_two_queries), 0) AS users_two_queries,
+                    COALESCE(SUM(users_three_plus_queries), 0) AS users_three_plus_queries,
+                    COALESCE(SUM(total_queries_executed), 0) AS total_queries_executed,
+                    COALESCE(SUM(social_shares), 0) AS social_shares,
+                    COALESCE(SUM(payment_clicks_micro), 0) AS payment_clicks_micro,
+                    COALESCE(SUM(payment_clicks_monthly), 0) AS payment_clicks_monthly,
+                    COALESCE(SUM(payments_confirmed), 0) AS payments_confirmed
+                FROM daily_metrics
+                """
+            ).fetchone()
+
         by_date = {str(r["metric_date"]): dict(r) for r in rows}
         series: list[dict[str, Any]] = []
-        totals = {
-            "visits_without_query": 0,
-            "users_single_query": 0,
-            "users_two_queries": 0,
-            "users_three_plus_queries": 0,
-            "total_queries_executed": 0,
-        }
+        window_totals = {k: 0 for k in metric_keys}
 
         for offset in range(safe_days):
             day_str = (end_d - timedelta(days=offset)).isoformat()
-            item = by_date.get(
-                day_str,
-                {
-                    "metric_date": day_str,
-                    "visits_without_query": 0,
-                    "users_single_query": 0,
-                    "users_two_queries": 0,
-                    "users_three_plus_queries": 0,
-                    "total_queries_executed": 0,
-                    "updated_at_iso": "",
-                },
-            )
-            normalized = {
-                "metric_date": day_str,
-                "visits_without_query": int(item["visits_without_query"] or 0),
-                "users_single_query": int(item["users_single_query"] or 0),
-                "users_two_queries": int(item["users_two_queries"] or 0),
-                "users_three_plus_queries": int(item["users_three_plus_queries"] or 0),
-                "total_queries_executed": int(item["total_queries_executed"] or 0),
-                "updated_at_iso": str(item.get("updated_at_iso") or ""),
-            }
+            normalized = self._normalize_metric_row(day_str, by_date.get(day_str))
             series.append(normalized)
-            for k in totals:
-                totals[k] += normalized[k]
+            for k in metric_keys:
+                window_totals[k] += normalized[k]
+
+        series_7d = series[:7]
+        totals_7d = {k: sum(item[k] for item in series_7d) for k in metric_keys}
+        all_time_totals = {
+            k: max(0, int((all_time_row[k] if all_time_row is not None else 0) or 0))
+            for k in metric_keys
+        }
 
         return {
             "today": series[0],
-            "last_7_days": series,
-            "totals_7_days": totals,
+            "all_time_totals": all_time_totals,
+            "daily": series,
+            "last_30_days": series,
+            "totals_30_days": window_totals,
+            "last_7_days": series_7d,
+            "totals_7_days": totals_7d,
         }

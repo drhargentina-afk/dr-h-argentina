@@ -1845,7 +1845,8 @@
         }
       }
 
-      // 2. Desbloquear exclusivamente la 2ª consulta actual (sin otorgar pase permanente)
+      // 2. Registrar métrica anónima de compartido (12s completados) y desbloquear exclusivamente la 2ª consulta actual
+      trackAnonymousConversionEvent("social_share");
       const pending = state.pendingConsultation;
       unlockDeliverablesBySocialShare(network, { syncBackend: false });
 
@@ -1974,6 +1975,10 @@
     }
 
     function redirectToLemonCheckout(planType) {
+      const eventName =
+        planType === "micro" ? "payment_click_micro" : "payment_click_monthly";
+      trackAnonymousConversionEvent(eventName);
+
       const targetUrl =
         planType === "micro"
           ? resolveCheckoutUrl(state.microPaymentUrl, EXTERNAL_MICRO_PAYMENT_URL)
@@ -2068,6 +2073,7 @@
     const btnToggleMetrics = document.getElementById("btn-admin-toggle-metrics");
     const metricsPanel = document.getElementById("admin-metrics-panel");
     const btnRefreshMetrics = document.getElementById("btn-admin-refresh-metrics");
+    const btnExportMetricsCsv = document.getElementById("btn-admin-export-metrics-csv");
 
     if (btnToggleMetrics && metricsPanel) {
       btnToggleMetrics.addEventListener("click", (e) => {
@@ -2091,6 +2097,13 @@
       btnRefreshMetrics.addEventListener("click", (e) => {
         e.preventDefault();
         loadAdminDailyMetrics();
+      });
+    }
+
+    if (btnExportMetricsCsv) {
+      btnExportMetricsCsv.addEventListener("click", (e) => {
+        e.preventDefault();
+        exportAdminMetricsCsv();
       });
     }
   }
@@ -2125,19 +2138,41 @@
   }
 
   function renderAdminMetricsData(data) {
+    state.lastAdminMetricsData = data || null;
     const todayCardsEl = document.getElementById("admin-metrics-today-cards");
     const tbodyEl = document.getElementById("admin-metrics-7d-body");
     const today = data?.today || {};
-    const rows = Array.isArray(data?.last_7_days) ? data.last_7_days : [];
+    const allTime = data?.all_time_totals || data?.totals_30_days || data?.totals_7_days || {};
+    const rows = Array.isArray(data?.daily)
+      ? data.daily
+      : Array.isArray(data?.last_30_days)
+      ? data.last_30_days
+      : Array.isArray(data?.last_7_days)
+      ? data.last_7_days
+      : [];
 
-    const hasAnyActivity = rows.some(
-      (r) =>
-        Number(r.visits_without_query || 0) > 0 ||
-        Number(r.users_single_query || 0) > 0 ||
-        Number(r.users_two_queries || 0) > 0 ||
-        Number(r.users_three_plus_queries || 0) > 0 ||
-        Number(r.total_queries_executed || 0) > 0
-    );
+    const hasAnyActivity =
+      Number(allTime.visits_without_query || 0) > 0 ||
+      Number(allTime.users_single_query || 0) > 0 ||
+      Number(allTime.users_two_queries || 0) > 0 ||
+      Number(allTime.users_three_plus_queries || 0) > 0 ||
+      Number(allTime.total_queries_executed || 0) > 0 ||
+      Number(allTime.social_shares || 0) > 0 ||
+      Number(allTime.payment_clicks_micro || 0) > 0 ||
+      Number(allTime.payment_clicks_monthly || 0) > 0 ||
+      Number(allTime.payments_confirmed || 0) > 0 ||
+      rows.some(
+        (r) =>
+          Number(r.visits_without_query || 0) > 0 ||
+          Number(r.users_single_query || 0) > 0 ||
+          Number(r.users_two_queries || 0) > 0 ||
+          Number(r.users_three_plus_queries || 0) > 0 ||
+          Number(r.total_queries_executed || 0) > 0 ||
+          Number(r.social_shares || 0) > 0 ||
+          Number(r.payment_clicks_micro || 0) > 0 ||
+          Number(r.payment_clicks_monthly || 0) > 0 ||
+          Number(r.payments_confirmed || 0) > 0
+      );
 
     if (!hasAnyActivity) {
       setAdminMetricsUiState("empty");
@@ -2147,24 +2182,68 @@
     if (todayCardsEl) {
       todayCardsEl.innerHTML = "";
       const cardsSpec = [
-        { label: `Visitas s/ consulta (${today.metric_date || "Hoy"})`, val: today.visits_without_query || 0 },
-        { label: "1 consulta", val: today.users_single_query || 0 },
-        { label: "2 consultas (Social)", val: today.users_two_queries || 0 },
-        { label: "3+ (Comercial)", val: today.users_three_plus_queries || 0 },
-        { label: "Total IA hoy", val: today.total_queries_executed || 0 }
+        {
+          label: "Visitas s/ consulta",
+          val: allTime.visits_without_query ?? today.visits_without_query ?? 0,
+          sub: `Hoy: ${today.visits_without_query || 0}`
+        },
+        {
+          label: "1 consulta",
+          val: allTime.users_single_query ?? today.users_single_query ?? 0,
+          sub: `Hoy: ${today.users_single_query || 0}`
+        },
+        {
+          label: "2 consultas (Social)",
+          val: allTime.users_two_queries ?? today.users_two_queries ?? 0,
+          sub: `Hoy: ${today.users_two_queries || 0}`
+        },
+        {
+          label: "3+ (Comercial)",
+          val: allTime.users_three_plus_queries ?? today.users_three_plus_queries ?? 0,
+          sub: `Hoy: ${today.users_three_plus_queries || 0}`
+        },
+        {
+          label: "Total IA",
+          val: allTime.total_queries_executed ?? today.total_queries_executed ?? 0,
+          sub: `Hoy: ${today.total_queries_executed || 0}`
+        },
+        {
+          label: "Compartidos",
+          val: allTime.social_shares ?? today.social_shares ?? 0,
+          sub: `Hoy: ${today.social_shares || 0}`
+        },
+        {
+          label: "Clics Micro $4k",
+          val: allTime.payment_clicks_micro ?? today.payment_clicks_micro ?? 0,
+          sub: `Hoy: ${today.payment_clicks_micro || 0}`
+        },
+        {
+          label: "Clics Mensual $20k",
+          val: allTime.payment_clicks_monthly ?? today.payment_clicks_monthly ?? 0,
+          sub: `Hoy: ${today.payment_clicks_monthly || 0}`
+        },
+        {
+          label: "Pagos confirmados",
+          val: allTime.payments_confirmed ?? today.payments_confirmed ?? 0,
+          sub: `Hoy: ${today.payments_confirmed || 0}`
+        }
       ];
       cardsSpec.forEach((c) => {
         const card = document.createElement("div");
         card.style.cssText =
-          "padding:0.55rem 0.7rem;border-radius:0.5rem;border:1px solid var(--border-subtle, rgba(148,163,184,0.35));background:var(--bg-surface, transparent);display:flex;flex-direction:column;gap:0.15rem;";
+          "padding:0.5rem 0.65rem;border-radius:0.5rem;border:1px solid var(--border-subtle, rgba(148,163,184,0.35));background:var(--bg-surface, transparent);display:flex;flex-direction:column;gap:0.12rem;";
         const title = document.createElement("span");
-        title.style.cssText = "font-size:0.75rem;color:var(--text-secondary);";
+        title.style.cssText = "font-size:0.73rem;color:var(--text-secondary);";
         title.textContent = c.label;
         const num = document.createElement("strong");
-        num.style.cssText = "font-size:1.15rem;";
+        num.style.cssText = "font-size:1.12rem;";
         num.textContent = String(c.val);
+        const sub = document.createElement("span");
+        sub.style.cssText = "font-size:0.68rem;color:var(--text-secondary);";
+        sub.textContent = c.sub;
         card.appendChild(title);
         card.appendChild(num);
+        card.appendChild(sub);
         todayCardsEl.appendChild(card);
       });
     }
@@ -2180,7 +2259,11 @@
           r.users_single_query || 0,
           r.users_two_queries || 0,
           r.users_three_plus_queries || 0,
-          r.total_queries_executed || 0
+          r.total_queries_executed || 0,
+          r.social_shares || 0,
+          r.payment_clicks_micro || 0,
+          r.payment_clicks_monthly || 0,
+          r.payments_confirmed || 0
         ].forEach((cellVal) => {
           const td = document.createElement("td");
           td.style.cssText = "padding:0.32rem 0.42rem;font-size:0.74rem;white-space:nowrap;";
@@ -2192,6 +2275,76 @@
     }
 
     setAdminMetricsUiState("success");
+  }
+
+  function exportAdminMetricsCsv() {
+    const data = state.lastAdminMetricsData;
+    const rows = Array.isArray(data?.daily)
+      ? data.daily
+      : Array.isArray(data?.last_30_days)
+      ? data.last_30_days
+      : Array.isArray(data?.last_7_days)
+      ? data.last_7_days
+      : [];
+    const allTime = data?.all_time_totals || {};
+
+    const headers = [
+      "Fecha",
+      "Visitas_sin_consulta",
+      "1_consulta",
+      "2_consultas_Social",
+      "3_o_mas_Comercial",
+      "Total_IA",
+      "Compartio",
+      "Clic_Micro_4k",
+      "Clic_Mensual_20k",
+      "Pagos_confirmados"
+    ];
+
+    const lines = [headers.join(",")];
+    lines.push(
+      [
+        "TOTAL_HISTORICO_ACUMULADO",
+        Number(allTime.visits_without_query || 0),
+        Number(allTime.users_single_query || 0),
+        Number(allTime.users_two_queries || 0),
+        Number(allTime.users_three_plus_queries || 0),
+        Number(allTime.total_queries_executed || 0),
+        Number(allTime.social_shares || 0),
+        Number(allTime.payment_clicks_micro || 0),
+        Number(allTime.payment_clicks_monthly || 0),
+        Number(allTime.payments_confirmed || 0)
+      ].join(",")
+    );
+
+    rows.forEach((r) => {
+      lines.push(
+        [
+          r.metric_date || "",
+          Number(r.visits_without_query || 0),
+          Number(r.users_single_query || 0),
+          Number(r.users_two_queries || 0),
+          Number(r.users_three_plus_queries || 0),
+          Number(r.total_queries_executed || 0),
+          Number(r.social_shares || 0),
+          Number(r.payment_clicks_micro || 0),
+          Number(r.payment_clicks_monthly || 0),
+          Number(r.payments_confirmed || 0)
+        ].join(",")
+      );
+    });
+
+    const csvContent = "\uFEFF" + lines.join("\r\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const todayKey = new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+    link.href = url;
+    link.download = `dr_h_metricas_diarias_${todayKey}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
   async function loadAdminDailyMetrics() {
@@ -2206,6 +2359,24 @@
       renderAdminMetricsData(data);
     } catch (err) {
       setAdminMetricsUiState("error", err?.message || "Error consultando métricas diarias.");
+    }
+  }
+
+  function trackAnonymousConversionEvent(eventType) {
+    const allowed = new Set(["social_share", "payment_click_micro", "payment_click_monthly"]);
+    if (!allowed.has(eventType)) return;
+    try {
+      void fetch("/api/metrics/event", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Device-Fingerprint": getDeviceFingerprint()
+        },
+        body: JSON.stringify({ event_type: eventType }),
+        keepalive: true
+      }).catch((err) => console.warn("Telemetry event notice:", err));
+    } catch (err) {
+      console.warn("Telemetry event notice:", err);
     }
   }
 
